@@ -15,10 +15,16 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 import './initComponents.js';
+import * as agendaCaldavService from './js/agendaCaldavService.js';
 
 
 document.dispatchEvent(new CustomEvent('agenda-connectors-refresh'));
 
+if (!Vue.prototype.$agendaCaldavService) {
+  window.Object.defineProperty(Vue.prototype, '$agendaCaldavService', {
+    value: agendaCaldavService,
+  });
+}
 
 // getting language of the PLF
 const lang = eXo.env.portal.language || 'en';
