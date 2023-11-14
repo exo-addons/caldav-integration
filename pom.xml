@@ -7,16 +7,16 @@
     <groupId>org.exoplatform.addons</groupId>
     <version>17-M04</version>
   </parent>
-  <groupId>org.exoplatform.addons.caldav-integration</groupId>
-  <artifactId>caldav-integration-parent</artifactId>
-  <version>1.2.x-SNAPSHOT</version>
+  <groupId>org.exoplatform.addons.caldav</groupId>
+  <artifactId>caldav-parent</artifactId>
+  <version>1.0.x-SNAPSHOT</version>
   <packaging>pom</packaging>
-  <name>eXo Caldav Integration - Parent POM</name>
+  <name>eXo Caldav - Parent POM</name>
   <modules>
-    <module>caldav-integration-api</module>
-    <module>caldav-integration-services</module>
-    <module>caldav-integration-webapp</module>
-    <module>caldav-integration-packaging</module>
+    <module>caldav-api</module>
+    <module>caldav-services</module>
+    <module>caldav-webapp</module>
+    <module>caldav-packaging</module>
   </modules>
   <scm>
     <connection>scm:git:git://github.com/exoplatform/caldav-integration.git</connection>
@@ -30,8 +30,6 @@
     <!-- Sonar properties -->
     <sonar.organization>exoplatform</sonar.organization>
 
-    <com.microsoft.ews.version>2.0</com.microsoft.ews.version>
-    <javax.xml.ws.version>2.3.1</javax.xml.ws.version>
   </properties>
   <dependencyManagement>
     <dependencies>
@@ -46,21 +44,21 @@
       <!-- Current project artifacts -->
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>caldav-integration-api</artifactId>
+        <artifactId>caldav-api</artifactId>
         <version>${project.version}</version>
         <scope>provided</scope>
       </dependency>
 
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>caldav-integration-services</artifactId>
+        <artifactId>caldav-services</artifactId>
         <version>${project.version}</version>
         <scope>provided</scope>
       </dependency>
 
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>caldav-integration-webapp</artifactId>
+        <artifactId>caldav-webapp</artifactId>
         <version>${project.version}</version>
         <scope>provided</scope>
         <type>war</type>
@@ -68,22 +66,10 @@
 
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>caldav-integration-packaging</artifactId>
+        <artifactId>caldav-packaging</artifactId>
         <version>${project.version}</version>
         <scope>provided</scope>
         <type>zip</type>
-      </dependency>
-      <dependency>
-        <groupId>javax.xml.ws</groupId>
-        <artifactId>jaxws-api</artifactId>
-        <scope>provided</scope>
-        <version>${javax.xml.ws.version}</version>
-      </dependency>
-      <dependency>
-        <groupId>com.microsoft.ews-java-api</groupId>
-        <artifactId>ews-java-api</artifactId>
-        <version>${com.microsoft.ews.version}</version>
-        <scope>provided</scope>
       </dependency>
     </dependencies>
   </dependencyManagement>
