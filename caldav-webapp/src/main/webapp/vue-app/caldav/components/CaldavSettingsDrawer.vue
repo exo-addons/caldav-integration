@@ -29,14 +29,14 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
       <v-form ref="form1" class="pa-2 ms-2 mt-4">
         <div class="d-flex flex-column flex-grow-1">
           <div class="d-flex flex-column mb-2">
-            <label class="d-flex flex-row font-weight-bold my-2">{{ $t('agenda.caldavCalendar.settings.connect.email.label') }}</label>
+            <label class="d-flex flex-row font-weight-bold my-2">{{ $t('agenda.caldavCalendar.settings.connect.username.label') }}</label>
             <div class="d-flex flex-row">
               <v-text-field
                 v-model="account"
                 type="text"
                 name="account"
                 :error-messages="accountErrorMessage"
-                :placeholder="$t('agenda.caldavCalendar.settings.connect.email.placeholder')"
+                :placeholder="$t('agenda.caldavCalendar.settings.connect.username.placeholder')"
                 class="input-block-level ignore-vuetify-classes pa-0"
                 outlined
                 required
@@ -85,8 +85,6 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 <script>
 
-const MAIL_PATTERN = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
-
 export default {
 
   data: () => ({
@@ -98,11 +96,8 @@ export default {
     error: '',
   }),
   computed: {
-    accountRule() {
-      return this.account && this.account.toLowerCase().match(MAIL_PATTERN);
-    },
     accountErrorMessage() {
-      return this.accountRule || this.account.length === 0 ? '': this.$t('agenda.caldavCalendar.settings.connect.email.error');
+      return this.account.length === 0 ? '': this.$t('agenda.caldavCalendar.settings.connect.username.error');
     },
     displayPasswordIcon() {
       return this.showPassWord ? 'mdi-eye': 'mdi-eye-off';
@@ -111,7 +106,7 @@ export default {
       return this.showPassWord ? 'text': 'password';
     },
     disableConnectButton() {
-      return this.account === '' || this.password === '' || !this.accountRule;
+      return this.account === '' || this.password === '';
     }
   },
   watch: {
