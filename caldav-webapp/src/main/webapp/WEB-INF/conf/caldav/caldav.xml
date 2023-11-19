@@ -40,6 +40,10 @@
           <name>connectorUrl</name>
           <value>${exo.agenda.caldav.connector.url}</value>
         </value-param>
+        <value-param>
+          <name>connectorOauth</name>
+          <value>false</value>
+        </value-param>
       </init-params>
     </component-plugin>
   </external-component-plugins>

@@ -16,8 +16,9 @@
  */
 import './initComponents.js';
 import * as agendaCaldavService from './js/agendaCaldavService.js';
+import caldavConnector from './caldav-connector/caldavConnector.js';
 
-
+extensionRegistry.registerExtension('agenda', 'connectors', caldavConnector);
 document.dispatchEvent(new CustomEvent('agenda-connectors-refresh'));
 
 if (!Vue.prototype.$agendaCaldavService) {
@@ -32,17 +33,26 @@ const lang = eXo.env.portal.language || 'en';
 const url = `${eXo.env.portal.context}/${eXo.env.portal.rest}/i18n/bundle/locale.portlet.Caldav-${lang}.json`;
 
 const vuetify = new Vuetify(eXo.env.portal.vuetifyPreset);
-
+if (extensionRegistry) {
+  const components = extensionRegistry.loadComponents('CaldavAgendaConnectors');
+  if (components && components.length > 0) {
+    components.forEach(cmp => {
+      Vue.component(cmp.componentName, cmp.componentOptions);
+    });
+  }
+}
 const appId = 'CaldavApplication';
 
 export function init() {
   exoi18n.loadLanguageAsync(lang, url).then(i18n => {
+
     // init Vue app when locale resources are ready
     Vue.createApp({
       template: `<caldav-agenda-connectors id="${appId}" />`,
       vuetify,
       i18n
-    }, `#${appId}`, 'Caldav Settings');
+    }, `#${appId}`, 'Caldav connector Settings');
   });
 }
+
 Vue.use(Vuetify);

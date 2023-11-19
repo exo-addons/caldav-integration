@@ -25,7 +25,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 export default {
   created() {
-    document.addEventListener('open-connector-caldav-settings-drawer',this.openCaldavDrawer);
+    document.addEventListener('open-caldav-connector-settings-drawer',this.openCaldavDrawer);
   },
   methods: {
     openCaldavDrawer() {
