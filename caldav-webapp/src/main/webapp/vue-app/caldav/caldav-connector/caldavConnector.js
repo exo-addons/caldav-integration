@@ -2,7 +2,7 @@ import * as caldavConnectorService from '../js/agendaCaldavService.js';
 export default {
   name: 'agenda.caldavCalendar',
   description: 'agenda.caldavCalendar.description',
-  avatar: '/caldav/skin/images/caldav.png',
+  avatar: '/caldav/skin/image/caldav.png',
   isOauth: false,
   canConnect: true,
   canPush: true,
