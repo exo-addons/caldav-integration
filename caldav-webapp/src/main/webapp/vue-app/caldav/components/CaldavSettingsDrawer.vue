@@ -94,11 +94,9 @@ export default {
     connectionSuccess: false,
     saving: false,
     error: '',
+    accountErrorMessage: ''
   }),
   computed: {
-    accountErrorMessage() {
-      return this.account.length === 0 ? '': this.$t('agenda.caldavCalendar.settings.connect.username.error');
-    },
     displayPasswordIcon() {
       return this.showPassWord ? 'mdi-eye': 'mdi-eye-off';
     },
@@ -106,10 +104,17 @@ export default {
       return this.showPassWord ? 'text': 'password';
     },
     disableConnectButton() {
-      return this.account === '' || this.password === '';
+      return this.account === '' || this.account < 3 || this.password === '';
     }
   },
   watch: {
+    account() {
+      if (this.account.length<3) {
+        this.accountErrorMessage = this.$t('agenda.caldavCalendar.settings.connect.username.error');
+      } else {
+        this.accountErrorMessage = '';
+      }
+    },
     saving() {
       if (this.saving) {
         this.$refs.caldavSettingsDrawer.startLoading();

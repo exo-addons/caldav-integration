@@ -1,3 +1,19 @@
+/*
+ * Copyright (C) 2023 eXo Platform SAS.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.exoplatform.caldav.utils;
 
 import org.exoplatform.commons.api.settings.data.Scope;
@@ -15,8 +31,6 @@ public class CaldavConnectorUtils {
   public static final Scope  CALDAV_CONNECTOR_SETTING_SCOPE = Scope.APPLICATION.id("CaldavAgendaConnector");
 
   public static final String CALDAV_USERNAME_KEY            = "CaldavUsername";
-
-  public static final String CALDAV_CREDENTIAL_CHECKED      = "CaldavCredentialChecked";
 
   public static final String CALDAV_PASSWORD_KEY            = "CaldavPassword";
 
