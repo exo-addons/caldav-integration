@@ -8,29 +8,21 @@ export default {
   isOauth: false,
   canConnect: true,
   canPush: true,
-  initialized: false,
+  initialized: true,
   isSignedIn: true,
   pushing: false,
   rank: 40,
-  serverUrl: '',
   connect() {
     return new Promise((resolve, reject) => {
       document.dispatchEvent(new CustomEvent('open-caldav-connector-settings-drawer'));
       document.addEventListener('test-connection', (settings) => {
         if (settings.detail) {
-          resolve('connection success');
+          resolve(settings.detail.username);
         } else {
           reject('connection canceled');
         }
       });
     });
-  },
-  init(connector) {
-    if (this.initialized) {
-      return;
-    }
-    this.serverUrl = connector.serverUrl;
-    this.initialized = true;
   },
   disconnect() {
     return new Promise((resolve, reject) => {
@@ -50,26 +42,38 @@ export default {
   },
   async getCalendar(clientCaldav){
     const calendars = await clientCaldav.fetchCalendars();
-    return calendars[0];
+    if (calendars.length === 0) {
+      console.error('No calendar found');
+      return null;
+    } else {
+      return calendars[0];
+    }
   },
   async retrieveEvents(settings, periodStartDate, periodEndDate) {
+    const start = caldavConnectorService.toRFC3339(periodStartDate, false, true);
+    const end = caldavConnectorService.toRFC3339(periodEndDate, false, true);
     const clientCaldav = await tsdav.createDAVClient({
-      serverUrl: this.serverUrl,
+      serverUrl: settings.caldavUrl,
       credentials: {
         username: settings.username,
         password: settings.password,
       },
       authMethod: 'Basic',
       defaultAccountType: 'caldav',
+    }).catch(() => {
+      console.error('cant connect to caldav client check username and password');
     });
     //get calendar
     const calendar = await this.getCalendar(clientCaldav);
+    if (!calendar) {
+      return Promise.all(null);
+    }
     const events = await clientCaldav.fetchCalendarObjects({
       calendar,
       expand: true,
       timeRange: {
-        start: periodStartDate,
-        end: periodEndDate,
+        start: start,
+        end: end,
       }
     });
     const listEvent = [];
@@ -88,6 +92,7 @@ export default {
         caldavEvent.start= startDate && new Date(startDate[0].jCal[3]);
         caldavEvent.end= endDate && new Date(endDate[0].jCal[3]);
         caldavEvent.etag= event.etag;
+        caldavEvent.url = event.url;
         listEvent.push(caldavEvent);
       } else {
         return Promise.all(null);
@@ -95,5 +100,79 @@ export default {
 
     });
     return listEvent;
+  },
+  pushEvent(event,) {
+    return caldavConnectorService.getCaldavSetting().then((settings)=> {
+      return this.saveEvent(event, settings);
+    });
+  },
+  deleteEvent(event) {
+    this.getEvents(event.startDate,event.endDate).then((events)=> {
+      events.forEach((obj) => {
+        if (event.id === parseInt(obj.uid)) {
+          return caldavConnectorService.getCaldavSetting().then((settings)=> {
+            return this.removeEvent(obj, settings);
+          });
+        }
+      });
+    });
+  },
+  async removeEvent(event, settings) {
+    const clientCaldav = await tsdav.createDAVClient({
+      serverUrl: settings.caldavUrl,
+      credentials: {
+        username: settings.username,
+        password: settings.password,
+      },
+      authMethod: 'Basic',
+      defaultAccountType: 'caldav',
+    }).catch(() => {
+      console.error('cant connect to caldav client check username and password');
+    });
+    //get calendar
+    const calendar = await this.getCalendar(clientCaldav);
+    if (!calendar) {
+      return Promise.all(null);
+    } else {
+      return clientCaldav.deleteCalendarObject({
+        calendarObject: {
+          url: event.url,
+          etag: event.etag,
+        },
+      });
+    }
+  },
+  async saveEvent(event, settings) {
+    const clientCaldav = await tsdav.createDAVClient({
+      serverUrl: settings.caldavUrl,
+      credentials: {
+        username: settings.username,
+        password: settings.password,
+      },
+      authMethod: 'Basic',
+      defaultAccountType: 'caldav',
+    }).catch(() => {
+      console.error('cant connect to caldav client check username and password');
+    });
+    //get calendar
+    const calendar = await this.getCalendar(clientCaldav);
+    if (!calendar) {
+      return Promise.all(null);
+    } else {
+      const eventId = event.id;
+      const iCalString = `
+BEGIN:VCALENDAR
+BEGIN:VEVENT
+SUMMARY:${event.summary}
+UID:${eventId}
+DTSTART:${event.start.replace(/[-:]/g, '')}
+DTEND:${event.end.replace(/[-:]/g, '')}
+END:VEVENT
+END:VCALENDAR
+`.trim();
+      await clientCaldav.createCalendarObject({
+        calendar, iCalString, filename: `${eventId}.ics`,
+      });
+    }
   }
 };
