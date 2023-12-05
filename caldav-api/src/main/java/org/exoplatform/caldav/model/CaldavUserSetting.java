@@ -28,4 +28,6 @@ public class CaldavUserSetting {
   private String  username;
 
   private String  password;
+
+  private String  caldavUrl;
 }

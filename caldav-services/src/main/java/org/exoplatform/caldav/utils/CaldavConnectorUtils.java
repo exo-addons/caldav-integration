@@ -31,6 +31,7 @@ public class CaldavConnectorUtils {
   public static final Scope  CALDAV_CONNECTOR_SETTING_SCOPE = Scope.APPLICATION.id("CaldavAgendaConnector");
 
   public static final String CALDAV_USERNAME_KEY            = "CaldavUsername";
+  public static final String CALDAV_URL_KEY            = "CaldavURL";
 
   public static final String CALDAV_PASSWORD_KEY            = "CaldavPassword";
 

@@ -31,7 +31,7 @@ public class CaldavConnectorStorage {
   }
 
   public void createCaldavSetting(CaldavUserSetting caldavUserSetting, long userIdentityId) {
-
+    String caldavUrl = System.getProperty("exo.agenda.caldav.connector.url");
     String encodedPassword = CaldavConnectorUtils.encode(caldavUserSetting.getPassword());
 
     this.settingService.set(Context.USER.id(String.valueOf(userIdentityId)),
@@ -42,6 +42,10 @@ public class CaldavConnectorStorage {
                             CaldavConnectorUtils.CALDAV_CONNECTOR_SETTING_SCOPE,
                             CaldavConnectorUtils.CALDAV_PASSWORD_KEY,
                             SettingValue.create(encodedPassword));
+    this.settingService.set(Context.USER.id(String.valueOf(userIdentityId)),
+                            CaldavConnectorUtils.CALDAV_CONNECTOR_SETTING_SCOPE,
+                            CaldavConnectorUtils.CALDAV_URL_KEY,
+                            SettingValue.create(caldavUrl));
   }
 
   public CaldavUserSetting getCaldavSetting(long userIdentityId) {
@@ -52,7 +56,9 @@ public class CaldavConnectorStorage {
     SettingValue<?> password = this.settingService.get(Context.USER.id(String.valueOf(userIdentityId)),
                                                        CaldavConnectorUtils.CALDAV_CONNECTOR_SETTING_SCOPE,
                                                        CaldavConnectorUtils.CALDAV_PASSWORD_KEY);
-
+    SettingValue<?> caldavUrl = this.settingService.get(Context.USER.id(String.valueOf(userIdentityId)),
+                                                        CaldavConnectorUtils.CALDAV_CONNECTOR_SETTING_SCOPE,
+                                                        CaldavConnectorUtils.CALDAV_URL_KEY);
 
     CaldavUserSetting caldavUserSetting = new CaldavUserSetting();
     if (username != null) {
@@ -61,6 +67,9 @@ public class CaldavConnectorStorage {
     if (password != null) {
       String decodePassword = CaldavConnectorUtils.decode((String) password.getValue());
       caldavUserSetting.setPassword(decodePassword);
+    }
+    if (caldavUrl != null) {
+      caldavUserSetting.setCaldavUrl((String) caldavUrl.getValue());
     }
     return caldavUserSetting;
   }
@@ -73,5 +82,8 @@ public class CaldavConnectorStorage {
     this.settingService.remove(Context.USER.id(String.valueOf(userIdentityId)),
                                CaldavConnectorUtils.CALDAV_CONNECTOR_SETTING_SCOPE,
                                CaldavConnectorUtils.CALDAV_PASSWORD_KEY);
+    this.settingService.remove(Context.USER.id(String.valueOf(userIdentityId)),
+                               CaldavConnectorUtils.CALDAV_CONNECTOR_SETTING_SCOPE,
+                               CaldavConnectorUtils.CALDAV_URL_KEY);
   }
 }
