@@ -27,8 +27,12 @@ public class CaldavConnectorServiceImpl implements CaldavConnectorService {
 
   private static final Log       LOG = ExoLogger.getLogger(CaldavConnectorServiceImpl.class);
 
+  private String                 caldavUrl;
+
   public CaldavConnectorServiceImpl(CaldavConnectorStorage caldavConnectorStorage) {
+    String caldavUrl = System.getProperty("exo.agenda.caldav.connector.url");
     this.caldavConnectorStorage = caldavConnectorStorage;
+    this.caldavUrl = caldavUrl;
   }
 
   @Override
@@ -42,7 +46,9 @@ public class CaldavConnectorServiceImpl implements CaldavConnectorService {
 
   @Override
   public CaldavUserSetting getCaldavSetting(long userIdentityId) {
-    return caldavConnectorStorage.getCaldavSetting(userIdentityId);
+    CaldavUserSetting caldavUserSetting = caldavConnectorStorage.getCaldavSetting(userIdentityId);
+    caldavUserSetting.setCaldavUrl(this.caldavUrl);
+    return caldavUserSetting;
   }
 
   @Override

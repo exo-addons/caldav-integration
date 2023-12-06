@@ -53,7 +53,7 @@ export default {
     const start = caldavConnectorService.toRFC3339(periodStartDate, false, true);
     const end = caldavConnectorService.toRFC3339(periodEndDate, false, true);
     const clientCaldav = await tsdav.createDAVClient({
-      serverUrl: settings.caldavUrl,
+      serverUrl: settings.caldavUrl.concat(settings.username,'/'),
       credentials: {
         username: settings.username,
         password: settings.password,
@@ -119,7 +119,7 @@ export default {
   },
   async removeEvent(event, settings) {
     const clientCaldav = await tsdav.createDAVClient({
-      serverUrl: settings.caldavUrl,
+      serverUrl: settings.caldavUrl.concat(settings.username,'/'),
       credentials: {
         username: settings.username,
         password: settings.password,
@@ -144,7 +144,7 @@ export default {
   },
   async saveEvent(event, settings) {
     const clientCaldav = await tsdav.createDAVClient({
-      serverUrl: settings.caldavUrl,
+      serverUrl: settings.caldavUrl.concat(settings.username,'/'),
       credentials: {
         username: settings.username,
         password: settings.password,
