@@ -33,6 +33,7 @@ public class CaldavConnectorServiceImpl implements CaldavConnectorService {
     String caldavUrl = System.getProperty("exo.agenda.caldav.connector.url");
     this.caldavConnectorStorage = caldavConnectorStorage;
     this.caldavUrl = caldavUrl;
+    
   }
 
   @Override
