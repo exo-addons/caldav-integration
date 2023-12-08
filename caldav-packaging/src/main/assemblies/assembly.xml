@@ -6,16 +6,6 @@
   </formats>
   <includeBaseDirectory>false</includeBaseDirectory>
   <dependencySets>
-    <!-- War -->
-    <dependencySet>
-      <useProjectArtifact>false</useProjectArtifact>
-      <outputDirectory>/webapps</outputDirectory>
-      <includes>
-        <include>${project.groupId}:caldav-webapp:war</include>
-      </includes>
-      <scope>provided</scope>
-      <outputFileNameMapping>${artifact.build.finalName}.${artifact.extension}</outputFileNameMapping>
-    </dependencySet>
     <!-- Libraries -->
     <dependencySet>
       <useProjectArtifact>false</useProjectArtifact>
@@ -28,12 +18,13 @@
     </dependencySet>
   </dependencySets>
   <fileSets>
+    <!-- War -->
     <fileSet>
+      <directory>${project.build.directory}/final</directory>
       <includes>
-        <include>lib/*.jar</include>
+        <include>caldav.war</include>
       </includes>
-      <directory>src/main/assemblies</directory>
-      <outputDirectory></outputDirectory>
+      <outputDirectory>webapps</outputDirectory>
     </fileSet>
   </fileSets>
 </assembly>
