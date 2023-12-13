@@ -160,16 +160,23 @@ export default {
       return Promise.all(null);
     } else {
       const eventId = event.id;
-      const iCalString = `
-BEGIN:VCALENDAR
+      let iCalString = `BEGIN:VCALENDAR
 BEGIN:VEVENT
 SUMMARY:${event.summary}
 UID:${eventId}
 DTSTART:${event.start.replace(/[-:]/g, '')}
 DTEND:${event.end.replace(/[-:]/g, '')}
-END:VEVENT
+LOCATION:${event.location}
+DESCRIPTION:${event.description}
+`;
+      if (event.recurrence?.rrule) {
+        iCalString += `RRULE:${event.recurrence.rrule}
+`;
+      }
+      iCalString += `END:VEVENT
 END:VCALENDAR
-`.trim();
+`;
+      iCalString=iCalString.trim();
       await clientCaldav.createCalendarObject({
         calendar, iCalString, filename: `${eventId}.ics`,
       });
