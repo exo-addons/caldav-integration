@@ -166,9 +166,22 @@ SUMMARY:${event.summary}
 UID:${eventId}
 DTSTART:${event.start.replace(/[-:]/g, '')}
 DTEND:${event.end.replace(/[-:]/g, '')}
-LOCATION:${event.location}
-DESCRIPTION:${event.description}
 `;
+      if (event.location) {
+        iCalString += `LOCATION:${event.location}
+`;
+      }
+      let description = '';
+      if (event.description) {
+        description += `${event.description.replace('\n','\\n')}\\n`;
+      }
+      if (event.conferences.length > 0) {
+        description += event.conferences[0]?.url;
+      }
+      if (description !== '') {
+        iCalString += `DESCRIPTION:${description}
+`;
+      }
       if (event.recurrence?.rrule) {
         iCalString += `RRULE:${event.recurrence.rrule}
 `;
