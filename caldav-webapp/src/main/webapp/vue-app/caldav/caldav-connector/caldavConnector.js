@@ -41,7 +41,7 @@ export default {
     });
   },
   async getCalendar(clientCaldav){
-    const calendars = await clientCaldav.fetchCalendars();
+    const calendars = await clientCaldav.fetchCalendars({headersToExclude: 'If-None-Match'});
     if (calendars.length === 0) {
       console.error('No calendar found');
       return null;
@@ -74,7 +74,8 @@ export default {
       timeRange: {
         start: start,
         end: end,
-      }
+      },
+      headersToExclude: 'If-None-Match'
     });
     const listEvent = [];
     events.map(event => {
@@ -139,6 +140,7 @@ export default {
           url: event.url,
           etag: event.etag,
         },
+        headersToExclude: 'If-None-Match'
       });
     }
   },
@@ -191,7 +193,7 @@ END:VCALENDAR
 `;
       iCalString=iCalString.trim();
       await clientCaldav.createCalendarObject({
-        calendar, iCalString, filename: `${eventId}.ics`,
+        calendar, iCalString, filename: `${eventId}.ics`,headersToExclude: 'If-None-Match'
       });
     }
   }
