@@ -31,74 +31,9 @@
     <finalName>caldav-addon</finalName>
     <plugins>
       <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-dependency-plugin</artifactId>
-        <executions>
-          <execution>
-            <id>unpack-caldav-webapp</id>
-            <phase>package</phase>
-            <goals>
-              <goal>unpack</goal>
-            </goals>
-            <configuration>
-              <artifactItems>
-                <artifactItem>
-                  <artifactId>caldav-webapp</artifactId>
-                  <groupId>${project.groupId}</groupId>
-                  <version>${project.version}</version>
-                  <type>war</type>
-                  <overWrite>false</overWrite>
-                  <outputDirectory>${project.build.directory}/caldav-webapp</outputDirectory>
-                </artifactItem>
-              </artifactItems>
-              <outputDirectory>${project.build.directory}/wars</outputDirectory>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <!-- This replacement is used to fix CORS problem with Mdaemon server https://github.com/natelindev/tsdav/issues/166 -->
-        <groupId>com.google.code.maven-replacer-plugin</groupId>
-        <artifactId>replacer</artifactId>
-        <version>1.5.3</version>
-        <executions>
-          <execution>
-            <id>replace-caldav-header</id>
-            <phase>package</phase>
-            <goals>
-              <goal>replace</goal>
-            </goals>
-            <configuration>
-              <file>${project.build.directory}/caldav-webapp/js/caldav.bundle.js</file>
-          <replacements>
-            <replacement>,"If-None-Match":"*"
-              <token>,\"If-None-Match\":\"\*\"}</token>
-              <value>}</value>
-            </replacement>
-          </replacements>
-        </configuration>
-      </execution>
-      </executions>
-      </plugin>
-      <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-assembly-plugin</artifactId>
         <executions>
-          <execution>
-            <id>package-caldav-webapp</id>
-            <phase>package</phase>
-            <goals>
-              <goal>single</goal>
-            </goals>
-            <configuration>
-              <appendAssemblyId>false</appendAssemblyId>
-              <descriptors>
-                <descriptor>src/main/assemblies/caldav-webapp.xml</descriptor>
-              </descriptors>
-              <finalName>caldav</finalName>
-              <outputDirectory>${project.build.directory}/final</outputDirectory>
-            </configuration>
-          </execution>
           <execution>
             <id>package-extension</id>
             <phase>package</phase>
