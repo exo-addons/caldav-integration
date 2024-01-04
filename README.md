@@ -2,6 +2,12 @@
 
 This addon is a calendar connector for eXo Platform allowing to read events in a caldav server and display it in eXo. 
 It also allow to send event from eXo to the caldav server.
+## How to install
+Launch this commands :
+```
+cd ${EXO_HOME}
+./addon install exo-caldav-integration
+```
 
 ## How to configure
 
@@ -18,3 +24,7 @@ or
 If exists, {username} will be replaced by the user username to call caldav API. 
 
 
+## Validated providers
+The following providers was tested and validated with this caldav-integration addon
+
+04/01/2024 - MDaemon
