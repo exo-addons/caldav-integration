@@ -90,6 +90,9 @@ export default {
         caldavEvent.uid = vEvent.getFirstPropertyValue('uid');
         caldavEvent.color = '#FFFFFF';
         caldavEvent.type = 'remoteEvent';
+        if (startDate && !startDate[0].jCal[3].includes('T')) {
+          caldavEvent.allDay=true;
+        }
         caldavEvent.start= startDate && new Date(startDate[0].jCal[3]);
         caldavEvent.end= endDate && new Date(endDate[0].jCal[3]);
         caldavEvent.etag= event.etag;
@@ -162,13 +165,23 @@ export default {
       return Promise.all(null);
     } else {
       const eventId = event.id;
+      let start = event.start.replace(/[-:]/g, '');
+      let end = event.end.replace(/[-:]/g, '');
       let iCalString = `BEGIN:VCALENDAR
 BEGIN:VEVENT
 SUMMARY:${event.summary}
 UID:${eventId}
-DTSTART:${event.start.replace(/[-:]/g, '')}
-DTEND:${event.end.replace(/[-:]/g, '')}
 `;
+      if (event.allDay) {
+        start = start.substring(0,8);
+        end = end.substring(0,8);
+        iCalString += `DTSTART:${start}
+`;
+      } else {
+        iCalString += `DTSTART:${start}
+DTEND:${end}
+`;
+      }
       if (event.location) {
         iCalString += `LOCATION:${event.location}
 `;
