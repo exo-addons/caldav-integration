@@ -21,6 +21,8 @@ Availables properties are :
 or
 `exo.agenda.caldav.connector.url=http://localhost/dav.php/calendars/{username}/`
 
+If exists, {username} will be replaced by the user username to call caldav API. 
+
 
 ## Validated providers
 The following providers was tested and validated with this caldav-integration addon
