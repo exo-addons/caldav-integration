@@ -23,6 +23,15 @@ or
 
 If exists, {username} will be replaced by the user username to call caldav API. 
 
+## Certificate
+To allow eXo to communicate with GPLI server, you need to add the GLPI Server ssh certificate in the java truststore of eXo Server :
+
+- Get the Glpi server certificate : `glpi.cer`
+- On eXo Server, type this command (adapt the path of the java keystore)
+
+```
+keytool -import -alias glpi -keystore $JAVA_HOME/jre/lib/security/cacerts -file glpi.cer
+``` 
 
 ## Validated providers
 The following providers was tested and validated with this caldav-integration addon
