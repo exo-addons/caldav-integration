@@ -18,14 +18,13 @@ package org.exoplatform.caldav.entity;
 
 import java.util.Date;
 
+import io.meeds.common.persistence.PortableSequence;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
 import jakarta.persistence.Temporal;
 import jakarta.persistence.TemporalType;
@@ -78,8 +77,7 @@ import org.exoplatform.caldav.model.PendingPushKind;
 public class CaldavPendingPushEntity {
 
   @Id
-  @SequenceGenerator(name = "SEQ_CALDAV_PENDING_PUSH_ID", sequenceName = "SEQ_CALDAV_PENDING_PUSH_ID", allocationSize = 1)
-  @GeneratedValue(strategy = GenerationType.AUTO, generator = "SEQ_CALDAV_PENDING_PUSH_ID")
+  @PortableSequence(name = "SEQ_CALDAV_PENDING_PUSH_ID")
   @Column(name = "ID")
   private Long            id;
 
