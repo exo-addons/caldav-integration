@@ -89,6 +89,17 @@ describe('CaldavAdminServerDrawer', () => {
             saved && saved.push({method: 'update', payload});
             return Promise.resolve(payload);
           },
+          // Read on every open of a stored row (EXO-89648): the drawer repopulates the
+          // provider fields from it. Nothing here exercises them, so an empty answer
+          // is enough - but the method has to exist, because open() calls it before
+          // any of these scenarios starts.
+          getCaldavServerProviderConfig: () => Promise.resolve({}),
+        },
+        // Put on Vue.prototype by commons-exo-extension's own module, which the
+        // server drawer declares as a dependency and reads once on created(). Stated
+        // here because a shallowMount wires no other webapp's prototype additions.
+        $credentialsProviderService: {
+          getCredentialsProviders: () => Promise.resolve([]),
         },
         $t(key, args) {
           // Deliberately depends on `this`. eXo's $t reads this.$i18n, and a
