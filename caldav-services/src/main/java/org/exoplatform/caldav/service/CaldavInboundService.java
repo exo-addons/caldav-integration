@@ -439,14 +439,20 @@ public class CaldavInboundService {
    * less because this pair happens to hold a stale row for the same UID.
    *
    * <p>
-   * Asked for the deployment, not for the reading user (EXO-90190). The first
-   * version of this rule asked "did <em>this user's</em> mirror write it?",
-   * which is one level short: on an account two eXo users share, the copy was
-   * written by the other one, the user-scoped question answered no, and the
-   * copy was imported as a genuine remote event — then pushed back under a
-   * fresh UID, imported by the other user in turn, and so on every sweep. A
-   * mirror copy is eXo's whoever wrote it, and the mapping table says so for
-   * every user at once.
+   * Asked for the account the collection sits in — not for the reading user,
+   * and not for the whole server registration (EXO-90190). The first version
+   * of this rule asked "did <em>this user's</em> mirror write it?", which is
+   * one level short: on an account two eXo users share, the copy was written
+   * by the other one, the user-scoped question answered no, and the copy was
+   * imported as a genuine remote event — then pushed back under a fresh UID,
+   * imported by the other user in turn, and so on every sweep. A mirror copy
+   * is eXo's whoever wrote it, and the mapping table says so for every user
+   * at once. The second version asked for every account of the server, which
+   * is one level too far: an externally organised meeting keeps the
+   * organiser's UID, so a third user with their own account on the same
+   * server found their own copy "owned" and never saw the meeting. Copies
+   * live in accounts; the storage names the account by the collection's
+   * calendar home.
    *
    * <p>
    * The mirror pair itself is exempt. Reading the mirror back is not importing
@@ -456,14 +462,14 @@ public class CaldavInboundService {
    *
    * @param pair the binding being read
    * @param icsUid the object's iCalendar UID
-   * @return true when a mirror pair of any user on the pair's server already
+   * @return true when a mirror pair of any user on the pair's account already
    *         maps that UID
    */
   private boolean isMirrorOwned(CalendarSync pair, String icsUid) {
     if (pair.getOrigin() == SyncOrigin.MIRROR) {
       return false;
     }
-    return caldavSyncStorage.isMirrorOwned(pair.getServerId(), icsUid);
+    return caldavSyncStorage.isMirrorOwned(pair.getServerId(), pair.getRemoteHref(), icsUid);
   }
 
   /**

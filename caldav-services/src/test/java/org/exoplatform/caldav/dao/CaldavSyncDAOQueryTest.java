@@ -17,6 +17,7 @@
 package org.exoplatform.caldav.dao;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,6 +41,7 @@ import org.exoplatform.caldav.entity.CaldavCalendarSyncEntity;
 import org.exoplatform.caldav.entity.CaldavObjectSyncEntity;
 import org.exoplatform.caldav.model.CalendarSyncStatus;
 import org.exoplatform.caldav.model.SyncOrigin;
+import org.exoplatform.caldav.storage.CaldavSyncStorage;
 
 /**
  * Executes the two hand-written JPQL queries in this package against a real
@@ -116,33 +118,82 @@ public class CaldavSyncDAOQueryTest {
   }
 
   // ---------------------------------------------------------------------
-  // EXO-90190 — ownership is a fact about the deployment, not about one user.
-  // The rig runs one user against one server and the Mockito storage test
-  // answers whatever it is told, so this is the one place the widened
-  // question meets two users on one account against the engine that will
-  // answer it in production.
+  // EXO-90190 — ownership is a fact about the account: not about one user,
+  // and not about the whole server registration. The rig runs one user
+  // against one server and the Mockito storage test answers whatever it is
+  // told, so this is the one place the account-scoped question meets several
+  // users and several accounts against the engine that will answer it in
+  // production.
   // ---------------------------------------------------------------------
+
+  /** The shared account's calendar home, as the storage would pass it. */
+  private static final String   SHARED_HOME   = "/dav/calendars/751E/%";
+
+  /** A third user's own account on the same server, as a prefix. */
+  private static final String   OWN_HOME      = "/dav/calendars/8E8E/%";
+
+  /** The third user, connected with an account of their own. */
+  private static final long     USER_EIGHT    = 8L;
 
   /**
    * Two users on one account: the copy one of them wrote is eXo's.
    */
   @Test
   public void aCopyAnotherUsersMirrorWroteIsRecognisedAsEXosOwn() {
-    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/calendar");
+    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/exo-meetings");
     persistPair(USER_SIX, SHARED_SERVER, SyncOrigin.REMOTE, "/dav/calendars/751E/calendar");
     persistObjectSync(mirrorOfOne, SHARED_UID, 52L);
 
     // Asked from user six's pass, about user one's copy: eXo's.
-    assertEquals(1, objectSyncDAO.countByServerAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID));
+    assertEquals(1, objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
     // The server scope stays: a UID on one account says nothing about another.
-    assertEquals(0, objectSyncDAO.countByServerAndOriginAndIcsUid(99L, SyncOrigin.MIRROR, SHARED_UID));
+    assertEquals(0, objectSyncDAO.countByHomeAndOriginAndIcsUid(99L, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
     // Only a mirror copy is eXo's by construction; a calendar binding's row
     // says the object was read, not written.
-    assertEquals(0, objectSyncDAO.countByServerAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.EXO, SHARED_UID));
+    assertEquals(0, objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.EXO, SHARED_UID, SHARED_HOME));
   }
 
   /**
-   * The pinned negative: the question this one replaces answered zero here.
+   * The regression round one shipped: another account on the same server is
+   * not the shared account, and its user's meeting is not suppressed.
+   */
+  @Test
+  public void aMirrorCopyOnAnotherAccountOfTheServerDoesNotOwnAThirdUsersMeeting() {
+    // The worked example of the round-one review. An externally organised
+    // meeting keeps the organiser's UID as its remote identity; user one moved
+    // it onto a space calendar, so user one's mirror maps that externally
+    // issued UID. User eight, invited to the same meeting by the same
+    // organiser, is connected with their OWN account on the same server
+    // registration. Asked for the whole server, the question answered "eXo's"
+    // about user eight's genuine copy, and user eight never saw the meeting.
+    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/exo-meetings");
+    persistPair(USER_SIX, SHARED_SERVER, SyncOrigin.REMOTE, "/dav/calendars/751E/calendar");
+    persistPair(USER_EIGHT, SHARED_SERVER, SyncOrigin.REMOTE, "/dav/calendars/8E8E/calendar");
+    persistObjectSync(mirrorOfOne, SHARED_UID, 52L);
+
+    assertEquals(0,
+                 objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, OWN_HOME),
+                 "user eight's own copy of the meeting is not eXo's and must be imported");
+    assertEquals(1,
+                 objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME),
+                 "user six, on user one's account, still sees user one's copy as eXo's");
+
+    // The statement round one ran, kept as text so the regression stays
+    // reproducible after the method is gone: scoped to the server, it counted
+    // user one's mirror for user eight too.
+    long serverScoped = entityManager.createQuery("SELECT COUNT(o) FROM CaldavObjectSyncEntity o, CaldavCalendarSyncEntity p"
+        + " WHERE o.calendarSyncId = p.id"
+        + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid", Long.class)
+                                     .setParameter("serverId", SHARED_SERVER)
+                                     .setParameter("origin", SyncOrigin.MIRROR)
+                                     .setParameter("icsUid", SHARED_UID)
+                                     .getSingleResult();
+    assertEquals(1, serverScoped, "the server-scoped count is what suppressed user eight's meeting");
+  }
+
+  /**
+   * The pinned negative: the question the account-scoped one replaced twice
+   * answered zero here.
    */
   @Test
   public void theUserScopedQuestionThisReplacesAnsweredZeroForTheOtherUser() {
@@ -150,7 +201,7 @@ public class CaldavSyncDAOQueryTest {
     // that the defect stays reproducible after the method is gone: asked for
     // user six about user one's copy, it found nothing, and the import went
     // ahead. Anyone tempted to put the user predicate back can run this.
-    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/calendar");
+    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/exo-meetings");
     persistPair(USER_SIX, SHARED_SERVER, SyncOrigin.REMOTE, "/dav/calendars/751E/calendar");
     persistObjectSync(mirrorOfOne, SHARED_UID, 52L);
 
@@ -164,7 +215,7 @@ public class CaldavSyncDAOQueryTest {
                                    .getSingleResult();
 
     assertEquals(0, userScoped, "the user-scoped count is what let user six import user one's copy");
-    assertEquals(1, objectSyncDAO.countByServerAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID));
+    assertEquals(1, objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
   }
 
   /**
@@ -177,7 +228,7 @@ public class CaldavSyncDAOQueryTest {
     // because it feeds answer adoption, which records the reading user's
     // response. Widened, user six's pass would record user one's phone answer
     // as user six's own.
-    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/calendar");
+    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/exo-meetings");
     persistPair(USER_SIX, SHARED_SERVER, SyncOrigin.REMOTE, "/dav/calendars/751E/calendar");
     persistObjectSync(mirrorOfOne, SHARED_UID, 52L);
 
@@ -189,16 +240,51 @@ public class CaldavSyncDAOQueryTest {
   }
 
   /**
-   * The outbound lock tells another user's copy from one's own.
+   * The outbound lock tells another user's copy from one's own, on one account.
    */
   @Test
-  public void anotherUsersCopyIsToldApartFromOnesOwn() {
-    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/calendar");
+  public void anotherUsersCopyIsToldApartFromOnesOwnOnTheSameAccount() {
+    long mirrorOfOne = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/exo-meetings");
     persistObjectSync(mirrorOfOne, SHARED_UID, 52L);
 
-    assertEquals(1, objectSyncDAO.countByOtherOwnerAndOriginAndIcsUid(USER_SIX, SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID));
-    assertEquals(0, objectSyncDAO.countByOtherOwnerAndOriginAndIcsUid(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID));
-    assertEquals(0, objectSyncDAO.countByOtherOwnerAndOriginAndIcsUid(USER_SIX, 99L, SyncOrigin.MIRROR, SHARED_UID));
+    // User six, writing into their own collection on the shared account.
+    assertEquals(1,
+                 objectSyncDAO.countByOtherOwnerAndHomeAndOriginAndIcsUid(USER_SIX, SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
+    // User one, writing their own copy.
+    assertEquals(0,
+                 objectSyncDAO.countByOtherOwnerAndHomeAndOriginAndIcsUid(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
+    // Another server altogether.
+    assertEquals(0,
+                 objectSyncDAO.countByOtherOwnerAndHomeAndOriginAndIcsUid(USER_SIX, 99L, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
+    // User eight, writing the same UID into their own collection on their OWN
+    // account of the same server: nothing of user one's is at risk there, and
+    // round one refused this write.
+    assertEquals(0,
+                 objectSyncDAO.countByOtherOwnerAndHomeAndOriginAndIcsUid(USER_EIGHT, SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, OWN_HOME),
+                 "user eight's push into their own account is not a write over user one's copy");
+  }
+
+  /**
+   * A paused mirror still owns the copies it wrote: the rows and the objects
+   * outlive the connection.
+   */
+  @Test
+  public void aPausedMirrorStillOwnsTheCopiesItWrote() {
+    // The decision recorded on the DAO: disconnecting pauses the pair and
+    // deletes neither its rows nor the copies on the server, so the copy is
+    // still physically in the account and still eXo's. An ACTIVE predicate
+    // here would hand a departed user's copies to whoever else reads the
+    // account as genuine remote events — the defect back.
+    long pausedMirrorOfOne = persistPair(USER_ONE,
+                                         SHARED_SERVER,
+                                         SyncOrigin.MIRROR,
+                                         "/dav/calendars/751E/exo-meetings",
+                                         CalendarSyncStatus.PAUSED);
+    persistObjectSync(pausedMirrorOfOne, SHARED_UID, 52L);
+
+    assertEquals(1, objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
+    assertEquals(1,
+                 objectSyncDAO.countByOtherOwnerAndHomeAndOriginAndIcsUid(USER_SIX, SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, SHARED_HOME));
   }
 
   /**
@@ -207,17 +293,21 @@ public class CaldavSyncDAOQueryTest {
   @Test
   public void theUniqueIndexRefusesASecondRowForOnePairAndUid() {
     // What the duplicate-key hardening in CaldavPushService.saveMapping
-    // catches, produced by the real index rather than a thrown stub: two
-    // inserts of (pair, UID), the second refused as the translated
-    // DataIntegrityViolationException the service catches.
+    // converges on, produced by the real index rather than a thrown stub. The
+    // type it arrives as is this slice's — a Boot-managed factory translates
+    // it to DataIntegrityViolationException; production's own factory does
+    // not, see CaldavSyncStorageRawEntityManagerFactoryTest — which is why the
+    // service tells it by its JDBC cause and not by its type.
     long pair = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/751E/exo-meetings");
     persistObjectSync(pair, SHARED_UID, 52L);
     objectSyncDAO.flush();
 
-    assertThrows(DataIntegrityViolationException.class, () -> {
+    DataIntegrityViolationException refused = assertThrows(DataIntegrityViolationException.class, () -> {
       persistObjectSync(pair, SHARED_UID, 52L);
       objectSyncDAO.flush();
     });
+
+    assertTrue(CaldavSyncStorage.isDuplicateKey(refused), "told by the JDBC cause, which this shape carries too");
   }
 
   /**
@@ -235,9 +325,36 @@ public class CaldavSyncDAOQueryTest {
     persistPair(10L, SHARED_SERVER, SyncOrigin.EXO, "/dav/calendars/751E/exo-cal-e", CalendarSyncStatus.PAUSED);
 
     assertEquals(List.of(USER_ONE),
-                 calendarSyncDAO.findOtherUsersUnderHref(USER_SIX, SHARED_SERVER, CalendarSyncStatus.ACTIVE, "/dav/calendars/751E/%"));
-    assertTrue(calendarSyncDAO.findOtherUsersUnderHref(8L, SHARED_SERVER, CalendarSyncStatus.ACTIVE, "/dav/calendars/OTHER/%")
+                 calendarSyncDAO.findOtherUsersUnderHref(USER_SIX,
+                                                         SHARED_SERVER,
+                                                         CalendarSyncStatus.ACTIVE,
+                                                         SHARED_HOME,
+                                                         PageRequest.of(0, 10)));
+    assertTrue(calendarSyncDAO.findOtherUsersUnderHref(8L,
+                                                       SHARED_SERVER,
+                                                       CalendarSyncStatus.ACTIVE,
+                                                       "/dav/calendars/OTHER/%",
+                                                       PageRequest.of(0, 10))
                               .isEmpty());
+  }
+
+  /**
+   * The listing is bounded by its page, and the engine honours the bound.
+   */
+  @Test
+  public void theOtherUsersListedAreBoundedByThePage() {
+    for (long user = 20L; user < 25L; user++) {
+      persistPair(user, SHARED_SERVER, SyncOrigin.EXO, "/dav/calendars/751E/exo-cal-" + user);
+    }
+
+    assertEquals(2,
+                 calendarSyncDAO.findOtherUsersUnderHref(USER_SIX,
+                                                         SHARED_SERVER,
+                                                         CalendarSyncStatus.ACTIVE,
+                                                         SHARED_HOME,
+                                                         PageRequest.of(0, 2))
+                                .size(),
+                 "a shared account names who else is on it, not everybody who ever was");
   }
 
   /**
@@ -250,11 +367,51 @@ public class CaldavSyncDAOQueryTest {
 
     // Escaped, the underscore matches an underscore and nothing else.
     assertEquals(List.of(USER_ONE),
-                 calendarSyncDAO.findOtherUsersUnderHref(7L, SHARED_SERVER, CalendarSyncStatus.ACTIVE, "/dav/calendars/a!_b/%"));
+                 calendarSyncDAO.findOtherUsersUnderHref(7L,
+                                                         SHARED_SERVER,
+                                                         CalendarSyncStatus.ACTIVE,
+                                                         "/dav/calendars/a!_b/%",
+                                                         PageRequest.of(0, 10)));
     // Unescaped, it would have matched both — which is the reason the storage escapes it.
     assertEquals(2,
-                 calendarSyncDAO.findOtherUsersUnderHref(7L, SHARED_SERVER, CalendarSyncStatus.ACTIVE, "/dav/calendars/a_b/%")
+                 calendarSyncDAO.findOtherUsersUnderHref(7L,
+                                                         SHARED_SERVER,
+                                                         CalendarSyncStatus.ACTIVE,
+                                                         "/dav/calendars/a_b/%",
+                                                         PageRequest.of(0, 10))
                                 .size());
+  }
+
+  /**
+   * The prefix the storage builds — escape character included — is what the
+   * engine takes literally.
+   */
+  @Test
+  public void thePrefixTheStorageBuildsIsTakenLiterallyByTheEngine() {
+    // The storage escapes the pattern's wildcards and its own escape
+    // character, and here its output is driven through the real queries
+    // rather than a pattern written by hand: a home carrying a literal "!"
+    // and "_" matches itself and nothing that differs by one character.
+    long mirrorUnderOddHome = persistPair(USER_ONE, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/a!b_c/exo-meetings");
+    long mirrorUnderLookalike = persistPair(USER_SIX, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/ab_c/exo-meetings");
+    long mirrorUnderOtherLookalike = persistPair(USER_EIGHT, SHARED_SERVER, SyncOrigin.MIRROR, "/dav/calendars/a!bXc/exo-meetings");
+    persistObjectSync(mirrorUnderOddHome, SHARED_UID, 52L);
+    persistObjectSync(mirrorUnderLookalike, SHARED_UID, 53L);
+    persistObjectSync(mirrorUnderOtherLookalike, SHARED_UID, 54L);
+
+    String prefix = CaldavSyncStorage.homePrefixOf("/dav/calendars/a!b_c/calendar/");
+
+    assertEquals("/dav/calendars/a!!b!_c/%", prefix);
+    assertEquals(1,
+                 objectSyncDAO.countByHomeAndOriginAndIcsUid(SHARED_SERVER, SyncOrigin.MIRROR, SHARED_UID, prefix),
+                 "the odd home's own mirror, and neither lookalike");
+    assertEquals(List.of(USER_ONE),
+                 calendarSyncDAO.findOtherUsersUnderHref(USER_SIX,
+                                                         SHARED_SERVER,
+                                                         CalendarSyncStatus.ACTIVE,
+                                                         prefix,
+                                                         PageRequest.of(0, 10)));
+    assertFalse(CaldavSyncStorage.homePrefixOf("/dav/calendars/ab_c/calendar/").equals(prefix));
   }
 
   /**

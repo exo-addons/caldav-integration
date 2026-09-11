@@ -36,15 +36,24 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.time.Instant;
 import java.util.List;
+
+import jakarta.persistence.PersistenceException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.jpa.JpaSystemException;
 import org.mockito.InjectMocks;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+
+import org.exoplatform.caldav.LogRecorder;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -1659,7 +1668,8 @@ public class CaldavPushServiceTest {
     when(caldavSyncStorage.getPairByLocalCalendar(USER, SERVER, "cal-anchor")).thenReturn(boundPersonalPair());
     when(agendaRemoteEventService.findRemoteEvent(110L, USER)).thenReturn(null);
     when(agendaEventIcsMapper.toIcsEvent(any(), anyString(), anyLong())).thenReturn(event("uid-110"));
-    when(caldavSyncStorage.isMirrorOwnedByAnotherUser(USER, SERVER, "uid-110")).thenReturn(true);
+    when(caldavSyncStorage.isMirrorOwnedByAnotherUser(USER, SERVER, "/dav/calendars/john/exo-cal-cal-anchor", "uid-110"))
+                                                                                                                     .thenReturn(true);
     // Stubbed leniently so that removing the guard fails this test on the
     // write it then performs, not on a stub it happens to be missing.
     lenient().when(calDavClient.putObject(any(), anyString(), anyString()))
@@ -1693,8 +1703,59 @@ public class CaldavPushServiceTest {
 
     service.pushEvent(USER, "john", event("evt-1"), null, false);
 
-    verify(caldavSyncStorage, never()).isMirrorOwnedByAnotherUser(anyLong(), anyLong(), anyString());
+    verify(caldavSyncStorage, never()).isMirrorOwnedByAnotherUser(anyLong(), anyLong(), anyString(), anyString());
     verify(calDavClient).putObject(any(), anyString(), anyString());
+  }
+
+  /**
+   * A leftover binding on a collection eXo made for another calendar is not
+   * written through — the outbound half of the sweep's skip.
+   */
+  @Test
+  public void aLeftoverBindingOnAnotherUsersCollectionIsNotWrittenThrough() throws Exception {
+    // The route the inbound skip alone leaves open (EXO-90190): user six
+    // materialised user one's exo-cal collection as a calendar of their own
+    // before materialisation learned to skip such paths (EXO-89530). The sweep
+    // now refuses to read through that binding; but a push of user six's
+    // events in that calendar would still PUT them into user one's
+    // collection, where user one's EXO pair reads them, imports them and
+    // pushes them back onto the same href — a ping-pong between two users on
+    // exactly the bindings the skip was written for. Same path test, same
+    // answer: skipped, and listed so the cleanup has it.
+    String href = "/dav/calendars/john/exo-cal-6bade8c7-7598-48f2-aa24-a40b0ed0ac6c";
+    givenAnAgendaEvent(110L, 0L);
+    givenPersonalCalendar(7L, "cal-anchor");
+    CalendarSync leftover = boundPersonalPair();
+    leftover.setOrigin(SyncOrigin.REMOTE);
+    leftover.setRemoteHref(href);
+    when(caldavSyncStorage.getPairByLocalCalendar(USER, SERVER, "cal-anchor")).thenReturn(leftover);
+    when(agendaRemoteEventService.findRemoteEvent(110L, USER)).thenReturn(null);
+    when(agendaEventIcsMapper.toIcsEvent(any(), anyString(), anyLong())).thenReturn(event("uid-110"));
+    // Stubbed leniently so that removing the guard fails this test on the
+    // write it then performs, not on a stub it happens to be missing.
+    lenient().when(calDavClient.putObject(any(), anyString(), anyString()))
+             .thenReturn(new PutResult(201, "\"e\"", null));
+    lenient().when(caldavSyncStorage.saveObject(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    List<ILoggingEvent> listed;
+    try (LogRecorder log = new LogRecorder(CaldavPushService.class)) {
+      assertNull(service.pushAgendaEvent(USER, "john", 110L), "nothing was pushed, and nothing failed");
+      assertNull(service.pushAgendaEvent(USER, "john", 110L));
+      listed = log.events()
+                  .stream()
+                  .filter(recorded -> recorded.getLevel() == Level.WARN
+                      && recorded.getFormattedMessage().contains("it is skipped and should be removed"))
+                  .toList();
+    }
+
+    verify(calDavClient, never()).putObject(any(), anyString(), anyString());
+    verify(calDavClient, never()).updateObject(any(), anyString(), anyString(), anyString());
+    verify(calDavClient, never()).overwriteObject(any(), anyString(), anyString());
+    verify(caldavSyncStorage, never()).saveObject(any());
+    verify(caldavSyncStorage, never()).isMirrorOwnedByAnotherUser(anyLong(), anyLong(), anyString(), anyString());
+    assertEquals(1, listed.size(), "once per pair per process, not once per event");
+    assertTrue(listed.get(0).getFormattedMessage().startsWith("Binding 9 of user 42 writes into " + href),
+               listed.get(0).getFormattedMessage());
   }
 
   /**
@@ -1717,7 +1778,12 @@ public class CaldavPushServiceTest {
     inserted.setId(77L);
     // No row before the write; the concurrent push's row afterwards.
     when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null, inserted);
-    when(caldavSyncStorage.saveObject(any())).thenThrow(new DataIntegrityViolationException("Duplicate entry '1-evt-1' for key 'UQ_CALDAV_OBJECT_SYNC_UID'"))
+    // The shape production throws, not the one the test slice does: the
+    // Kernel's factory leaves the transaction manager on DefaultJpaDialect,
+    // which surfaces the refused insert as a JpaSystemException at commit.
+    // Round one caught DataIntegrityViolationException and would never have
+    // seen this.
+    when(caldavSyncStorage.saveObject(any())).thenThrow(duplicateKeyAtCommit())
                                              .thenAnswer(invocation -> invocation.getArgument(0));
 
     ObjectSync mapping = service.pushEvent(USER, "john", event("evt-1"), 52L, false);
@@ -1725,6 +1791,32 @@ public class CaldavPushServiceTest {
     assertEquals(77L, mapping.getId(), "the row that won, not a third attempt at inserting");
     assertEquals("\"etag-1\"", mapping.getEtag(), "carrying what this write knows");
     assertEquals(52L, mapping.getLocalEventId());
+    verify(caldavSyncStorage, times(2)).saveObject(any());
+  }
+
+  /**
+   * The same race, refused inside the repository call and arriving untranslated.
+   */
+  @Test
+  public void aMappingInsertedMeanwhileIsConvergedOnWhenTheRefusalArrivesUntranslated() {
+    // MySQL's identity columns run the insert at persist time, inside the
+    // repository proxy, where no translator bean exists on this platform: the
+    // refusal arrives as Hibernate's own PersistenceException, no Spring type
+    // at all. Same JDBC cause, same convergence.
+    givenAMirror();
+    when(calDavClient.putObject(any(), anyString(), anyString()))
+                                                                                          .thenReturn(new PutResult(201,
+                                                                                                                    "\"etag-1\"",
+                                                                                                                    null));
+    ObjectSync inserted = mapped("\"etag-0\"");
+    inserted.setId(77L);
+    when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null, inserted);
+    when(caldavSyncStorage.saveObject(any())).thenThrow(duplicateKeyInsideTheRepositoryCall())
+                                             .thenAnswer(invocation -> invocation.getArgument(0));
+
+    ObjectSync mapping = service.pushEvent(USER, "john", event("evt-1"), 52L, false);
+
+    assertEquals(77L, mapping.getId());
     verify(caldavSyncStorage, times(2)).saveObject(any());
   }
 
@@ -1742,11 +1834,88 @@ public class CaldavPushServiceTest {
                                                                                                                     "\"etag-1\"",
                                                                                                                     null));
     when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null);
-    when(caldavSyncStorage.saveObject(any())).thenThrow(new DataIntegrityViolationException("something else entirely"));
+    when(caldavSyncStorage.saveObject(any())).thenThrow(duplicateKeyAtCommit());
+
+    assertThrows(JpaSystemException.class, () -> service.pushEvent(USER, "john", event("evt-1"), null, false));
+
+    verify(caldavSyncStorage, times(1)).saveObject(any());
+  }
+
+  /**
+   * A failure that is not an integrity violation is rethrown without so much
+   * as reading the row.
+   */
+  @Test
+  public void aFailureThatIsNotADuplicateKeyIsRethrownWithoutReadingTheRow() {
+    // The catch is wide because the type is not stable; the discrimination is
+    // what keeps it from being a silencer. A lock timeout, a lost connection
+    // — anything without an integrity violation at its root — is not this
+    // race and is not looked into.
+    givenAMirror();
+    when(calDavClient.putObject(any(), anyString(), anyString()))
+                                                                                          .thenReturn(new PutResult(201,
+                                                                                                                    "\"etag-1\"",
+                                                                                                                    null));
+    when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null);
+    when(caldavSyncStorage.saveObject(any())).thenThrow(new JpaSystemException(new PersistenceException("could not execute statement",
+                                                                                                        new java.sql.SQLException("Lock wait timeout exceeded",
+                                                                                                                                  "40001",
+                                                                                                                                  1205))));
+
+    assertThrows(JpaSystemException.class, () -> service.pushEvent(USER, "john", event("evt-1"), null, false));
+
+    // Once, before the write; not again after the refusal.
+    verify(caldavSyncStorage, times(1)).getObjectByUid(1L, "evt-1");
+    verify(caldavSyncStorage, times(1)).saveObject(any());
+  }
+
+  /**
+   * The Spring type alone proves nothing: round one's stub, with no JDBC cause,
+   * is not a duplicate key.
+   */
+  @Test
+  public void aSpringTypeWithNoJdbcCauseIsNotTakenForADuplicateKey() {
+    // What round one's test threw, and what the slice's translation never
+    // produces without a constraint refusal beneath it. Pinned so that the
+    // discrimination stays on the cause: a catch that trusted the type would
+    // converge here, on a row it has no reason to believe exists.
+    givenAMirror();
+    when(calDavClient.putObject(any(), anyString(), anyString()))
+                                                                                          .thenReturn(new PutResult(201,
+                                                                                                                    "\"etag-1\"",
+                                                                                                                    null));
+    when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null);
+    when(caldavSyncStorage.saveObject(any())).thenThrow(new DataIntegrityViolationException("Duplicate entry '1-evt-1' for key 'UQ_CALDAV_OBJECT_SYNC_UID'"));
 
     assertThrows(DataIntegrityViolationException.class, () -> service.pushEvent(USER, "john", event("evt-1"), null, false));
 
-    verify(caldavSyncStorage, times(1)).saveObject(any());
+    verify(caldavSyncStorage, times(1)).getObjectByUid(1L, "evt-1");
+  }
+
+  /**
+   * The refusal as the Kernel-shaped factory surfaces it at commit.
+   *
+   * @return a JpaSystemException over Hibernate's exception over MySQL's
+   */
+  private static RuntimeException duplicateKeyAtCommit() {
+    return new JpaSystemException(new PersistenceException("could not execute statement", mysqlDuplicateEntry()));
+  }
+
+  /**
+   * The refusal as it surfaces from inside the repository call, where no
+   * translator runs.
+   *
+   * @return Hibernate's exception over MySQL's, no Spring type
+   */
+  private static RuntimeException duplicateKeyInsideTheRepositoryCall() {
+    return new PersistenceException("could not execute statement", mysqlDuplicateEntry());
+  }
+
+  /**
+   * @return what MySQL's driver throws for error 1062
+   */
+  private static SQLIntegrityConstraintViolationException mysqlDuplicateEntry() {
+    return new SQLIntegrityConstraintViolationException("Duplicate entry '1-evt-1' for key 'UQ_CALDAV_OBJECT_SYNC_UID'", "23000", 1062);
   }
 
   @Test

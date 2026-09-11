@@ -528,7 +528,7 @@ public class CaldavEventPropagationService {
     }
     int carried = 0;
     for (Map.Entry<Long, ObjectSync> holder : holders.entrySet()) {
-      if (rewriteOne(holder.getKey(), CaldavConnectorUtils.loginOf(identityManager, holder.getKey()), eventId, holder.getValue().getId())) {
+      if (rewriteOne(holder.getKey(), CaldavConnectorUtils.loginOf(identityManager, holder.getKey()), eventId, holder.getValue().getId()).landed()) {
         carried++;
       }
     }
@@ -608,7 +608,7 @@ public class CaldavEventPropagationService {
     int removed = 0;
     for (Map.Entry<Long, ObjectSync> holder : holders.entrySet()) {
       ObjectSync mapping = holder.getValue();
-      if (removeOne(holder.getKey(), CaldavConnectorUtils.loginOf(identityManager, holder.getKey()), mapping.getIcsUid(), mapping.getId(), mapping.getRemoteHref())) {
+      if (removeOne(holder.getKey(), CaldavConnectorUtils.loginOf(identityManager, holder.getKey()), mapping.getIcsUid(), mapping.getId(), mapping.getRemoteHref()).landed()) {
         // At INFO and one line per copy, deliberately: this is the line an
         // administrator watching the first sweep after the deploy is looking
         // for, and a per-pass total would tell them how many without telling
@@ -715,7 +715,7 @@ public class CaldavEventPropagationService {
     int removed = 0;
     for (Map.Entry<Long, ObjectSync> holder : holders.entrySet()) {
       ObjectSync mapping = holder.getValue();
-      if (removeOne(holder.getKey(), CaldavConnectorUtils.loginOf(identityManager, holder.getKey()), mapping.getIcsUid(), mapping.getId(), mapping.getRemoteHref())) {
+      if (removeOne(holder.getKey(), CaldavConnectorUtils.loginOf(identityManager, holder.getKey()), mapping.getIcsUid(), mapping.getId(), mapping.getRemoteHref()).landed()) {
         removed++;
       }
     }
@@ -958,9 +958,12 @@ public class CaldavEventPropagationService {
         settled(copy.getId());
       } else if (CaldavPushService.isKnownState(e.getCode())) {
         // A state of the holder rather than a failure of this write: they have
-        // no connected account, or none that names a destination. Recorded
-        // without a trace and without the word failure. The obligation still
-        // stands, so the day they connect the sweep writes their copy.
+        // no connected account, none that names a destination, or the object
+        // is another user's copy. Recorded without a trace and without the
+        // word failure. The obligation still stands and is retried by the
+        // sweep like any refusal — and abandoned after maxPushAttempts like
+        // any refusal, so a holder who connects later gets the copy only if
+        // an edit renews it.
         LOG.debug("The answer of user {} to event {} is not carried to the copy of user {}: {} ({})",
                   answererIdentityId,
                   eventId,
@@ -1109,15 +1112,15 @@ public class CaldavEventPropagationService {
    * @param eventId the agenda event to write again
    * @param objectSyncId the mapping row the copy is recorded under, null when
    *          the caller has no row to settle an obligation against
-   * @return true when the copy was rewritten
+   * @return how it went: landed, or the code it was refused with
    */
-  private boolean rewriteOne(long userIdentityId, String username, long eventId, Long objectSyncId) {
+  private Settlement rewriteOne(long userIdentityId, String username, long eventId, Long objectSyncId) {
     try {
       boolean written = caldavPushService.pushAgendaEvent(userIdentityId, username, eventId) != null;
       if (written) {
         settled(objectSyncId);
       }
-      return written;
+      return written ? Settlement.LANDED : Settlement.refused(null);
     } catch (CaldavPushException e) {
       if (CaldavPushService.CONFLICT.equals(e.getCode())) {
         // Somebody wrote that object between the read and the write — very
@@ -1134,11 +1137,14 @@ public class CaldavEventPropagationService {
         settled(objectSyncId);
       } else if (CaldavPushService.isKnownState(e.getCode())) {
         // A state of the holder rather than a failure of this write: they have
-        // no connected account, or none that names a destination. Retrying
-        // cannot move it and nobody but they can, so it is recorded without a
-        // trace and without the word failure. The obligation still stands —
-        // this branch changes what is printed, not what is owed, and the day
-        // they connect the sweep writes the copy.
+        // no connected account, none that names a destination, or the object
+        // is another user's copy. Retrying cannot move it and nobody but a
+        // person can, so it is recorded without a trace and without the word
+        // failure. This branch changes what is printed, not what is owed: the
+        // obligation still stands, the sweep retries it like any refusal, and
+        // after maxPushAttempts it is abandoned like any refusal — so a holder
+        // who connects later gets the copy only if an edit renews it. The
+        // abandonment line, in refuse, says which kind it was.
         LOG.debug("The edit of event {} is not carried to the copy of user {}: {} ({})",
                   eventId,
                   userIdentityId,
@@ -1151,13 +1157,13 @@ public class CaldavEventPropagationService {
                  e.getCode(),
                  e);
       }
-      return false;
+      return Settlement.refused(e.getCode());
     } catch (Exception | LinkageError e) {
       LOG.warn("The edit of event {} could not be carried to the copy held by user {}; it stays owed and is retried",
                eventId,
                userIdentityId,
                e);
-      return false;
+      return Settlement.refused(null);
     }
   }
 
@@ -1180,24 +1186,25 @@ public class CaldavEventPropagationService {
    * @param objectSyncId the mapping row the copy is recorded under, null when
    *          the caller has no row to settle an obligation against
    * @param remoteHref where the copy sits, for the log only; may be null
-   * @return true when the copy was removed
+   * @return how it went: landed, or the code it was refused with
    */
-  private boolean removeOne(long userIdentityId, String username, String icsUid, Long objectSyncId, String remoteHref) {
+  private Settlement removeOne(long userIdentityId, String username, String icsUid, Long objectSyncId, String remoteHref) {
     if (StringUtils.isBlank(icsUid)) {
       LOG.warn("Mapping {} of user {} carries no iCalendar identity; the copy it names cannot be removed",
                objectSyncId,
                userIdentityId);
-      return false;
+      return Settlement.refused(null);
     }
     try {
       caldavPushService.deleteEvent(userIdentityId, username, icsUid);
       settled(objectSyncId);
-      return true;
+      return Settlement.LANDED;
     } catch (Exception | LinkageError e) {
       if (e instanceof CaldavPushException refusal && CaldavPushService.isKnownState(refusal.getCode())) {
         // Nowhere to remove it from, because there is no account: a removal
         // owed to a user who never connected one is the same ordinary state as
-        // a copy never written for them, and it recurs on every sweep.
+        // a copy never written for them, and it recurs on every sweep until
+        // the attempt bound abandons it.
         //
         // Tested on the caught throwable rather than caught in a clause of its
         // own, so that the one message this method has stays written once.
@@ -1206,13 +1213,13 @@ public class CaldavEventPropagationService {
                   remoteHref,
                   refusal.getMessage(),
                   refusal.getCode());
-        return false;
+        return Settlement.refused(refusal.getCode());
       }
       LOG.warn("The copy of the deleted event held by user {} at {} could not be removed; it stays owed and is retried",
                userIdentityId,
                remoteHref,
                e);
-      return false;
+      return Settlement.refused(null);
     }
   }
 
@@ -1397,23 +1404,55 @@ public class CaldavEventPropagationService {
    * @return true when the write landed
    */
   private boolean settleOwed(long userIdentityId, String username, PendingPush pending) {
-    boolean landed;
+    Settlement settlement;
     if (pending.getKind() == PendingPushKind.REMOVE) {
-      landed = removeOne(userIdentityId, username, pending.getIcsUid(), pending.getObjectSyncId(), null);
+      settlement = removeOne(userIdentityId, username, pending.getIcsUid(), pending.getObjectSyncId(), null);
     } else if (pending.getLocalEventId() == null || pending.getLocalEventId() <= 0) {
       // A rewrite with no event to render is one nothing can ever satisfy.
       // Counted as a refusal rather than skipped, so the bound below takes it
       // off the pass instead of it being read for ever.
       LOG.warn("The copy of user {} is owed a rewrite that names no event; there is nothing to render for it",
                userIdentityId);
-      landed = false;
+      settlement = Settlement.refused(null);
     } else {
-      landed = rewriteOne(userIdentityId, username, pending.getLocalEventId(), pending.getObjectSyncId());
+      settlement = rewriteOne(userIdentityId, username, pending.getLocalEventId(), pending.getObjectSyncId());
     }
-    if (!landed) {
-      refuse(userIdentityId, pending);
+    if (!settlement.landed()) {
+      refuse(userIdentityId, pending, settlement.code());
     }
-    return landed;
+    return settlement.landed();
+  }
+
+  /**
+   * How one owed write went: it landed, or it did not, with the code the push
+   * gave for not landing when it gave one.
+   *
+   * <p>
+   * A boolean was enough while a refusal was only counted; it is not enough
+   * to say, on the attempt that abandons an obligation, whether a calendar
+   * server refused five writes or eXo declined to send any — which is what
+   * {@link #refuse} has to tell an operator (EXO-90190).
+   *
+   * @param landed true when the copy now holds what was owed
+   * @param code the {@link CaldavPushException} code the attempt was refused
+   *          with; null when it landed, and null when nothing was refused —
+   *          a date poll, a calendar with no collection, an unclassified
+   *          failure
+   */
+  private record Settlement(boolean landed, String code) {
+
+    /** The write landed. */
+    private static final Settlement LANDED = new Settlement(true, null);
+
+    /**
+     * A write that did not land.
+     *
+     * @param code the refusal's code, null when there was no refusal to name
+     * @return the settlement
+     */
+    private static Settlement refused(String code) {
+      return new Settlement(false, code);
+    }
   }
 
   /**
@@ -1427,10 +1466,20 @@ public class CaldavEventPropagationService {
    * anybody can see that a copy is wrong and that eXo has stopped trying to
    * put it right.
    *
+   * <p>
+   * The abandonment line says what kind of refusal it was, because the
+   * operator it is written for acts on it (EXO-90190): a write a calendar
+   * server refused five times sends them to that server; a write eXo itself
+   * declined to send five times — no account, no destination, another user's
+   * copy — sends them to the user's account in eXo, and a message about a
+   * server refusing what was never sent would send them the wrong way.
+   *
    * @param userIdentityId whose calendar the copy sits in, for the log
    * @param pending what is owed to it, carrying the count as it stood
+   * @param code the code the attempt was refused with, null when nothing
+   *          named a reason
    */
-  private void refuse(long userIdentityId, PendingPush pending) {
+  private void refuse(long userIdentityId, PendingPush pending, String code) {
     try {
       caldavPendingPushStorage.refused(pending.getId());
     } catch (Exception | LinkageError e) {
@@ -1439,13 +1488,32 @@ public class CaldavEventPropagationService {
                e);
       return;
     }
-    if (pending.getAttempts() + 1 >= maxPushAttempts) {
-      // Once, on the attempt that reaches the bound, and never again: the next
-      // pass does not read this record at all. Said at WARN because it is the
-      // one state in this whole mechanism a human has to know about — a
-      // calendar copy that is wrong and is going to stay wrong.
-      LOG.warn("The copy of user {} has refused the write eXo owes it {} times; eXo stops trying to settle it",
+    if (pending.getAttempts() + 1 < maxPushAttempts) {
+      return;
+    }
+    // Once, on the attempt that reaches the bound, and never again: the next
+    // pass does not read this record at all. Said at WARN because it is the
+    // one state in this whole mechanism a human has to know about — a
+    // calendar copy that is wrong and is going to stay wrong.
+    if (CaldavPushService.isKnownState(code)) {
+      LOG.warn("The copy of user {} at mapping {} cannot take the write eXo owes it because of a state of that account ({});"
+          + " eXo declined to send it {} times and stops trying to settle it — nothing was sent to the calendar server,"
+          + " and only an edit of the meeting renews the obligation",
                userIdentityId,
+               pending.getObjectSyncId(),
+               code,
+               maxPushAttempts);
+    } else if (code != null) {
+      LOG.warn("The copy of user {} at mapping {} has refused the write eXo owes it {} times ({}); eXo stops trying to settle it",
+               userIdentityId,
+               pending.getObjectSyncId(),
+               maxPushAttempts,
+               code);
+    } else {
+      LOG.warn("The write eXo owes the copy of user {} at mapping {} did not land in {} attempts and no refusal names why"
+          + " — nothing to render, nowhere to write, or a failure the log above carries; eXo stops trying to settle it",
+               userIdentityId,
+               pending.getObjectSyncId(),
                maxPushAttempts);
     }
   }

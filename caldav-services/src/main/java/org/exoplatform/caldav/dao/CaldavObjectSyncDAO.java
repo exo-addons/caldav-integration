@@ -144,74 +144,103 @@ public interface CaldavObjectSyncDAO extends JpaRepository<CaldavObjectSyncEntit
                                            @Param("localEventIds") Collection<Long> localEventIds);
 
   /**
-   * How many pairs of one origin on one server — whoever holds them — already
-   * map this iCalendar UID.
+   * How many pairs of one origin on one <em>account</em> — whoever holds
+   * them — already map this iCalendar UID.
    *
    * <p>
    * The ownership question the inbound half asks before importing an object:
-   * "did eXo write this?". Every other lookup here is scoped to a single pair,
-   * which is precisely why it cannot answer it — a copy eXo wrote carries its
-   * mapping on the pair it was <em>written</em> into, and the pair asking is a
-   * different one. Pointed at a collection both halves read, the pair-scoped
-   * question finds nothing and the import creates a duplicate of eXo's own
-   * event.
+   * is this a copy eXo wrote? A MIRROR pair is an eXo copy by construction,
+   * whoever owns it, and the mapping table says so for every user at once —
+   * which is what the pair-scoped and then the user-scoped versions of this
+   * question could not see, and why two eXo users on one CalDAV account
+   * imported each other's copies as genuine remote events every sweep
+   * (EXO-90190).
    *
    * <p>
-   * <b>Deliberately not scoped to a user, and that is the whole of
-   * EXO-90190.</b> This question was first widened from the pair to the user,
-   * one level short of what it has to answer: a CalDAV account can be shared
-   * by several eXo users, and a copy one of them wrote into it is still a copy
-   * eXo wrote. Asked by the second user about the first one's copy, the
-   * user-scoped count answered zero, the copy was imported as a genuine remote
-   * event, pushed back as a fresh copy, imported by the first user in turn —
-   * and round it went every sweep, filling both users' calendars and the
-   * agenda table with duplicates of one meeting. Ownership is a fact about the
-   * deployment: a MIRROR pair is an eXo copy by construction, whoever owns it.
+   * <b>Scoped to the account, not to the server registration.</b> The first
+   * widening went one level too far: asked for every pair of the server, it
+   * answered "eXo's" about a UID that another user's mirror maps on a
+   * <em>different</em> account of the same server. That is reachable — an
+   * externally organised meeting keeps the organiser's UID as its remote
+   * identity, so once user A moves such an event onto a space calendar, A's
+   * mirror maps an externally issued UID; user C, invited by the same
+   * organiser and connected with their own account on the same server, then
+   * finds their own copy "owned" and never sees the meeting in eXo. Copies
+   * live in accounts: every pair this connector holds sits directly under its
+   * account's calendar home (the listing is depth one, and eXo mints its own
+   * collections there), so the home is the account's identity and the
+   * predicate is a prefix on the pair's href. The server predicate stays as
+   * the cheap first cut; the prefix is what decides.
    *
    * <p>
-   * The server scope stays — a UID on one account says nothing about an object
-   * on another. A count rather than the rows, for the reason every read here
-   * shares: the caller only ever asks whether the object is ours, and the row
-   * it would be handed belongs to another pair — of another user, now — so
-   * returning it would invite writing to a mapping this pair does not own.
+   * <b>No status predicate, on purpose.</b> Disconnecting only pauses a pair
+   * and deletes neither its rows nor the copies on the server, so a paused
+   * mirror's rows still describe objects that are physically in the account
+   * and still eXo's; restricting the question to active pairs would import
+   * those as genuine remote events for whoever else reads the account — the
+   * defect back, for departed users. The rows go when the copies go, which is
+   * the cleanup's job, not this predicate's.
+   *
+   * <p>
+   * A count rather than the rows, for the reason every read here shares: the
+   * caller only ever asks whether the object is ours, and the row it would be
+   * handed belongs to another pair — of another user, now — so returning it
+   * would invite writing to a mapping this pair does not own.
+   *
+   * <p>
+   * The prefix is the caller's, wildcards already escaped with {@code !};
+   * the repository only says which character escapes.
    *
    * @param serverId the declared server registration
    * @param origin which side created the collections that count as owning
    * @param icsUid the iCalendar UID looked for
-   * @return how many mappings of that origin carry the UID, zero when none do
+   * @param homePrefix a LIKE pattern for the account's calendar home, ending
+   *          in {@code /%}
+   * @return how many mappings of that origin under that home carry the UID,
+   *         zero when none do
    */
   @Query("SELECT COUNT(o) FROM CaldavObjectSyncEntity o, CaldavCalendarSyncEntity p"
       + " WHERE o.calendarSyncId = p.id"
-      + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid")
-  long countByServerAndOriginAndIcsUid(@Param("serverId") long serverId,
-                                       @Param("origin") SyncOrigin origin,
-                                       @Param("icsUid") String icsUid);
+      + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid"
+      + " AND p.remoteHref LIKE :homePrefix ESCAPE '!'")
+  long countByHomeAndOriginAndIcsUid(@Param("serverId") long serverId,
+                                     @Param("origin") SyncOrigin origin,
+                                     @Param("icsUid") String icsUid,
+                                     @Param("homePrefix") String homePrefix);
 
   /**
-   * How many pairs of one origin on one server, held by a user <em>other</em>
+   * How many pairs of one origin on one account, held by a user <em>other</em>
    * than this one, already map this iCalendar UID.
    *
    * <p>
    * The outbound half's lock (EXO-90190). Two pairs on one collection derive
    * the same href from a UID, so a personal-calendar write of an object that
    * another user's mirror maps would overwrite that user's copy in place. The
-   * push asks this before the PUT and refuses. A count and never a row, for
-   * the reason above — and here the row would belong to somebody else's
-   * account, which makes handing it over worse than useless.
+   * push asks this before the PUT and refuses. Scoped to the account for the
+   * reason {@link #countByHomeAndOriginAndIcsUid} gives — asked for the whole
+   * server, it refused a user's push of their own event into their own
+   * collection because another account of the server mirrored the same
+   * externally issued UID. A count and never a row, and no status predicate,
+   * for the reasons given there too.
    *
    * @param userIdentityId the user about to write, whose own pairs do not count
    * @param serverId the declared server registration
    * @param origin which side created the collections that count as owning
    * @param icsUid the iCalendar UID about to be written
-   * @return how many other users' mappings of that origin carry the UID
+   * @param homePrefix a LIKE pattern for the account's calendar home, ending
+   *          in {@code /%}, wildcards escaped with {@code !}
+   * @return how many other users' mappings of that origin under that home
+   *         carry the UID
    */
   @Query("SELECT COUNT(o) FROM CaldavObjectSyncEntity o, CaldavCalendarSyncEntity p"
       + " WHERE o.calendarSyncId = p.id AND p.userIdentityId <> :userIdentityId"
-      + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid")
-  long countByOtherOwnerAndOriginAndIcsUid(@Param("userIdentityId") long userIdentityId,
-                                           @Param("serverId") long serverId,
-                                           @Param("origin") SyncOrigin origin,
-                                           @Param("icsUid") String icsUid);
+      + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid"
+      + " AND p.remoteHref LIKE :homePrefix ESCAPE '!'")
+  long countByOtherOwnerAndHomeAndOriginAndIcsUid(@Param("userIdentityId") long userIdentityId,
+                                                  @Param("serverId") long serverId,
+                                                  @Param("origin") SyncOrigin origin,
+                                                  @Param("icsUid") String icsUid,
+                                                  @Param("homePrefix") String homePrefix);
 
   /**
    * Which eXo events this user's pairs of one origin, on one server, hold that

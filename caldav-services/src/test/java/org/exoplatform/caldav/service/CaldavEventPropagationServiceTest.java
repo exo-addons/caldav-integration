@@ -1629,6 +1629,77 @@ public class CaldavEventPropagationServiceTest {
     verify(caldavPushService, never()).deleteEvent(anyLong(), anyString(), anyString());
   }
 
+  // ------------------------------------ the abandonment line, EXO-90190
+
+  /**
+   * An obligation abandoned on a known state is not reported as a server
+   * refusing writes it never received.
+   */
+  @Test
+  public void anObligationAbandonedOnAKnownStateIsNotReportedAsAServerRefusal() {
+    // FOREIGN_COPY is refused before any PUT: the object is another user's
+    // copy, and no retry changes whose it is. It burns the attempt budget like
+    // any refusal — five, then abandoned — and the one line an operator gets
+    // has to say so, or it sends them to a calendar server that was never
+    // asked for anything.
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/mirror/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    when(caldavPushService.pushAgendaEvent(ALICE, login(ALICE), EVENT))
+                                                        .thenThrow(new CaldavPushException(CaldavPushService.FOREIGN_COPY,
+                                                                                           "another user's copy"));
+
+    List<ILoggingEvent> abandoned;
+    try (LogRecorder log = new LogRecorder(CaldavEventPropagationService.class)) {
+      service.propagateUpdate(EVENT, A_REAL_EDIT);
+      for (int sweep = 0; sweep < MAX_ATTEMPTS + 2; sweep++) {
+        service.retryOwedPushes(ALICE);
+      }
+      abandoned = log.events()
+                     .stream()
+                     .filter(recorded -> recorded.getLevel() == Level.WARN
+                         && recorded.getFormattedMessage().contains("stops trying to settle it"))
+                     .toList();
+    }
+
+    assertEquals(1, abandoned.size(), "said once, on the attempt that reaches the bound");
+    String line = abandoned.get(0).getFormattedMessage();
+    assertTrue(line.contains(CaldavPushService.FOREIGN_COPY), line);
+    assertTrue(line.contains("declined to send"), line);
+    assertFalse(line.contains("refused"), "nothing was sent to a calendar server, so none refused it: " + line);
+    assertEquals(0, caldavPendingPushStorage.owedAndStillTrying(ALICE, MAX_ATTEMPTS), "abandoned like any refusal");
+  }
+
+  /**
+   * An obligation abandoned on a server's refusal still says the server
+   * refused it, and which code.
+   */
+  @Test
+  public void anObligationAbandonedOnAServerRefusalSaysSo() {
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/mirror/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    when(caldavPushService.pushAgendaEvent(ALICE, login(ALICE), EVENT))
+                                                        .thenThrow(new CaldavPushException(CaldavPushService.SAVE,
+                                                                                           "this server will never take it"));
+
+    List<ILoggingEvent> abandoned;
+    try (LogRecorder log = new LogRecorder(CaldavEventPropagationService.class)) {
+      service.propagateUpdate(EVENT, A_REAL_EDIT);
+      for (int sweep = 0; sweep < MAX_ATTEMPTS + 2; sweep++) {
+        service.retryOwedPushes(ALICE);
+      }
+      abandoned = log.events()
+                     .stream()
+                     .filter(recorded -> recorded.getLevel() == Level.WARN
+                         && recorded.getFormattedMessage().contains("stops trying to settle it"))
+                     .toList();
+    }
+
+    assertEquals(1, abandoned.size());
+    String line = abandoned.get(0).getFormattedMessage();
+    assertTrue(line.contains("has refused the write eXo owes it " + MAX_ATTEMPTS + " times"), line);
+    assertTrue(line.contains(CaldavPushService.SAVE), line);
+  }
+
   // -------------------------------------------- the answer fan-out, EXO-89868
 
   /**
@@ -2481,12 +2552,25 @@ public class CaldavEventPropagationServiceTest {
      */
     @Override
     public List<PendingPush> attemptable(long userIdentityId, int maxAttempts, int limit) {
+      // Snapshots, as the real storage hands out: a DTO mapped off a row, which
+      // the UPDATE behind refused() does not reach. Handing out the stored
+      // instance let refused() move the count under the service's feet, and
+      // the abandonment line — which reads the count as it stood — fired one
+      // attempt early and then again.
       return byObject.values()
                      .stream()
                      .filter(pending -> pending.getUserIdentityId() == userIdentityId)
                      .filter(pending -> pending.getAttempts() < maxAttempts)
                      .sorted(Comparator.comparing(PendingPush::getId))
                      .limit(limit)
+                     .map(pending -> new PendingPush(pending.getId(),
+                                                     pending.getObjectSyncId(),
+                                                     pending.getUserIdentityId(),
+                                                     pending.getKind(),
+                                                     pending.getLocalEventId(),
+                                                     pending.getIcsUid(),
+                                                     pending.getAttempts(),
+                                                     pending.getSince()))
                      .toList();
     }
 

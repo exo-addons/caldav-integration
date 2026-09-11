@@ -1791,14 +1791,15 @@ public class CaldavSyncService {
    * <p>
    * The path is the reliable signal because eXo mints it: a collection under
    * the outbound prefix was created by eXo, whichever user asked for it, and
-   * is never something to import.
+   * is never something to import. One definition, the outbound service's,
+   * since EXO-90190: the push asks the same question before writing through a
+   * binding, and the two answers must not drift.
    *
    * @param href the collection path, canonical
    * @return true when the path is one eXo derives
    */
   private boolean isExoCreated(String href) {
-    String slug = StringUtils.substringAfterLast(StringUtils.stripEnd(href, "/"), "/");
-    return StringUtils.startsWith(slug, CaldavOutboundService.COLLECTION_PREFIX);
+    return CaldavOutboundService.isExoCreated(href);
   }
 
   /**

@@ -1350,7 +1350,7 @@ public class CaldavInboundServiceTest {
     // carries its mapping on the MIRROR pair, so eXo imports its own copy of a
     // space meeting back as a second, personal event beside it.
     givenServerObjects(object("o1.ics", "etag-1", ics("uid-1@example.test", "Sprint review")));
-    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
+    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
     // Stubbed leniently so that removing the guard fails this test on its
     // assertion — an event created — rather than on a missing stub.
     lenient().when(agendaEventService.createEvent(any(), any(), any(), any(), any(), any(), anyBoolean(), anyLong()))
@@ -1380,7 +1380,7 @@ public class CaldavInboundServiceTest {
     // user's own event.
     givenServerObjects(object("o1.ics", "etag-2", icsModifiedAt("uid-1@example.test", "Moved", "20261005T120000Z")));
     lenient().when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
-    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
+    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
     // Everything the update path would need, stubbed leniently: removing the
     // guard must fail this test on the update it then performs, not on a stub
     // it happens to be missing.
@@ -1423,7 +1423,7 @@ public class CaldavInboundServiceTest {
     // across 35 sweeps while eXo went on showing the meeting unanswered.
     String answered = icsAnsweredBy("uid-1@example.test", "Sprint review", "ACCEPTED");
     givenServerObjects(object("o1.ics", "etag-1", answered));
-    when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
+    when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
     when(caldavSyncStorage.getMirrorEventId(USER, SERVER, "uid-1@example.test")).thenReturn(777L);
 
     assertEquals(0, service.importInto(USER, LOGIN, pair(), calendar(), from(), to()));
@@ -1441,7 +1441,7 @@ public class CaldavInboundServiceTest {
     // user would get a second, personal event standing beside the space
     // meeting it was copied from.
     givenServerObjects(object("o1.ics", "etag-1", icsAnsweredBy("uid-1@example.test", "Sprint review", "ACCEPTED")));
-    when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
+    when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
     lenient().when(caldavSyncStorage.getMirrorEventId(USER, SERVER, "uid-1@example.test")).thenReturn(777L);
     lenient().when(agendaEventService.createEvent(any(), any(), any(), any(), any(), any(), anyBoolean(), anyLong()))
              .thenReturn(event(501L));
@@ -1468,7 +1468,7 @@ public class CaldavInboundServiceTest {
     // record an answer against would attribute somebody's answer to whatever
     // meeting came to hand.
     givenServerObjects(object("o1.ics", "etag-1", icsAnsweredBy("uid-1@example.test", "Sprint review", "ACCEPTED")));
-    when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
+    when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
     when(caldavSyncStorage.getMirrorEventId(USER, SERVER, "uid-1@example.test")).thenReturn(null);
 
     assertEquals(0, service.importInto(USER, LOGIN, pair(), calendar(), from(), to()));
@@ -1486,8 +1486,8 @@ public class CaldavInboundServiceTest {
     // have nothing to do with it.
     givenServerObjects(object("o1.ics", "etag-1", icsAnsweredBy("uid-1@example.test", "Sprint review", "ACCEPTED")),
                        object("o2.ics", "etag-2", ics("uid-9@example.test", "Dentist")));
-    when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
-    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-9@example.test")).thenReturn(false);
+    when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
+    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-9@example.test")).thenReturn(false);
     when(caldavSyncStorage.getMirrorEventId(USER, SERVER, "uid-1@example.test")).thenReturn(777L);
     when(caldavAnswerAdoptionService.adoptAnswer(eq(USER), eq(777L), anyString()))
                                                                                  .thenThrow(new IllegalStateException("agenda is down"));
@@ -1506,7 +1506,7 @@ public class CaldavInboundServiceTest {
     // meeting in the user's own calendar carries attendee lines that are
     // content, not identity, and must never act on a platform user's behalf.
     givenServerObjects(object("o1.ics", "etag-1", icsAnsweredBy("uid-9@example.test", "Dentist", "ACCEPTED")));
-    when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-9@example.test")).thenReturn(false);
+    when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-9@example.test")).thenReturn(false);
     // Answering as though a mapping existed, deliberately: it makes the
     // ownership check the only thing standing between this object and the
     // adoption, so a pass that asked before checking fails here rather than
@@ -1528,7 +1528,7 @@ public class CaldavInboundServiceTest {
     // than a wall: the meeting a colleague put in the user's own calendar has
     // no mapping anywhere, and the whole feature is that it appears in eXo.
     givenServerObjects(object("o1.ics", "etag-1", ics("uid-9@example.test", "Dentist")));
-    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-9@example.test")).thenReturn(false);
+    lenient().when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-9@example.test")).thenReturn(false);
     givenAgendaCreates(501L);
 
     assertEquals(1, service.importInto(USER, LOGIN, pair(), calendar(), from(), to()));
@@ -1560,7 +1560,7 @@ public class CaldavInboundServiceTest {
 
     assertEquals(1, service.importInto(USER, LOGIN, mirror, calendar(), from(), to()));
 
-    verify(caldavSyncStorage, never()).isMirrorOwned(anyLong(), anyString());
+    verify(caldavSyncStorage, never()).isMirrorOwned(anyLong(), anyString(), anyString());
   }
 
   /**
@@ -1696,7 +1696,7 @@ public class CaldavInboundServiceTest {
     givenServerObjects(object("o1.ics", "etag-1", icsAnsweredBy("uid-1@example.test", "Sprint review", "ACCEPTED")));
     // Ownership is a fact about the deployment: SOME mirror on this server
     // maps the UID, so the object is eXo's...
-    when(caldavSyncStorage.isMirrorOwned(SERVER, "uid-1@example.test")).thenReturn(true);
+    when(caldavSyncStorage.isMirrorOwned(SERVER, HREF, "uid-1@example.test")).thenReturn(true);
     // ...but no mirror of THIS user does, so it stands for no event of theirs.
     // That asymmetry is the point, not an accident of stubbing: the answer on
     // the copy is user one's, and recording it as user six's would be the
