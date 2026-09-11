@@ -66,6 +66,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.exoplatform.caldav.model.CaldavServer;
+import org.exoplatform.caldav.model.ServerQuirk;
 import org.exoplatform.caldav.model.MirrorTargetKind;
 import org.exoplatform.caldav.storage.CaldavServerStorage;
 import org.exoplatform.services.connector.credentials.ConnectorCredentialsException;
@@ -621,6 +622,67 @@ public class CaldavServerServiceTest {
     assertEquals(false, provider.getAllValues().get(0).isEnabled());
     assertEquals("agenda.caldavCalendar.2", provider.getAllValues().get(1).getName());
     assertEquals(false, provider.getAllValues().get(1).isEnabled());
+  }
+
+  /**
+   * The seeded Bluemind row arrives excused for what BlueMind is known to do to
+   * a copy — the same three catalogue entries the browser's BlueMind preset
+   * ticks on a declaration — because the preset is offered on a declaration
+   * only, which made the one BlueMind registration eXo ships the one that
+   * could never carry it. On a live account every stored object paid for that:
+   * the {@code X-ALT-DESC} BlueMind adds read as an edit, three repairs, then
+   * abandonment.
+   *
+   * <p>
+   * Read back the way the comparison reads a row, with
+   * {@link ServerQuirk#listMatches(String, String)}, against members of the
+   * families rather than the patterns themselves — so what is pinned is that
+   * a copy carrying these properties would be excused, not that a string was
+   * copied. Each entry is asserted in the column its own direction files it
+   * under, and nothing else is ticked: the description is still compared, eXo
+   * still writes everything it writes, and the Stalwart row keeps the nulls
+   * that let the deployment-wide properties decide for it.
+   */
+  @Test
+  public void shouldSeedBluemindExcusedForItsCatalogueBehaviours() {
+    System.setProperty(CaldavServerService.CALDAV_ENABLED_PROPERTY, "false");
+    when(caldavServerStorage.countServers()).thenReturn(0L);
+    CaldavServer createdBluemind = server(2, "agenda.caldavCalendar.2", "Bluemind", null,
+                                          CaldavServerService.DEFAULT_BLUEMIND_URL, false);
+    when(caldavServerStorage.createServer(any(), eq(CaldavServerService.CALDAV_PROVIDER_NAME))).thenReturn(createdBluemind);
+
+    caldavServerService.seedDefaultServers();
+
+    ArgumentCaptor<CaldavServer> bluemind = ArgumentCaptor.forClass(CaldavServer.class);
+    verify(caldavServerStorage).createServer(bluemind.capture(), eq(CaldavServerService.CALDAV_PROVIDER_NAME));
+    String ignored = bluemind.getValue().getIgnoredProperties();
+    String dropped = bluemind.getValue().getDroppedProperties();
+    // ADDS_FORMATTED_DESCRIPTION and ADDS_COMPATIBILITY_MARKERS point ADDED,
+    // so they land in the ignored list — members of each family, not the
+    // pattern literal, so a wildcard that stopped matching would be caught.
+    assertTrue(ServerQuirk.listMatches(ignored, "X-ALT-DESC"), ignored);
+    assertTrue(ServerQuirk.listMatches(ignored, "X-MOZ-LASTACK"), ignored);
+    assertTrue(ServerQuirk.listMatches(ignored, "X-MICROSOFT-CDO-BUSYSTATUS"), ignored);
+    // DROPS_CONFERENCE points DROPPED, so it lands in the dropped list.
+    assertTrue(ServerQuirk.listMatches(dropped, "CONFERENCE"), dropped);
+    // And the columns are not confused with each other.
+    assertFalse(ServerQuirk.listMatches(dropped, "X-ALT-DESC"), dropped);
+    assertFalse(ServerQuirk.listMatches(ignored, "CONFERENCE"), ignored);
+    // Nothing the preset does not tick: the blunt entry stays off, and eXo
+    // leaves nothing out of what it writes.
+    assertFalse(ServerQuirk.listMatches(dropped, "DESCRIPTION"), dropped);
+    assertNull(bluemind.getValue().getOmittedProperties());
+    // The seed lists are the catalogue's, not a second spelling of it.
+    for (ServerQuirk quirk : CaldavServerService.BLUEMIND_SEED_QUIRKS) {
+      for (String pattern : quirk.getPatterns()) {
+        assertTrue(ServerQuirk.listMatches(ignored + "," + dropped, pattern), pattern);
+      }
+    }
+
+    ArgumentCaptor<CaldavServer> stalwart = ArgumentCaptor.forClass(CaldavServer.class);
+    verify(caldavServerStorage).createSeedServer(stalwart.capture(), eq(CaldavServerService.CALDAV_PROVIDER_NAME));
+    assertNull(stalwart.getValue().getIgnoredProperties());
+    assertNull(stalwart.getValue().getDroppedProperties());
   }
 
   /**
