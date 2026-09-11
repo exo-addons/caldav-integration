@@ -146,23 +146,22 @@ public class CaldavServerService {
   /**
    * The catalogue entries the seeded BlueMind row arrives excused for: the
    * behaviours a live account was characterised with across EXO-89716 to
-   * EXO-89828 — the three the browser's BlueMind preset ticks on a declaration
-   * ({@code serverPresets.js}), plus
-   * {@link ServerQuirk#STAMPS_DEFAULT_PRIORITY}.
+   * EXO-89828, and the same four the browser's BlueMind preset ticks on a
+   * declaration ({@code serverPresets.js}).
    *
    * <p>
-   * <b>That fourth entry is a divergence from the preset, and a deliberate
-   * one to leave visible rather than to hide.</b> The priority stamp was
-   * characterised on the same account as the other three (EXO-89828) and
-   * belongs in the seed for the same reason they do; it is not in the preset
-   * because a preset also carries a <i>summary sentence</i> naming exactly
-   * what it ticks — {@code caldav.admin.servers.preset.bluemind.summary},
-   * pinned in both directions by {@code serverPresets.test.js} — so widening
-   * the preset is a product-copy change and not only a list edit. Until that
-   * is taken, a row declared through the drawer's BlueMind preset arrives
-   * excused for three behaviours and the seeded row for four, and the
-   * administrator meets the fourth the ordinary way: the sweep observes it on
-   * their own server and the drawer offers it with its cost.
+   * <b>The two lists are the same list, and that is a constraint rather than
+   * a coincidence.</b> A preset also carries a <i>summary sentence</i> naming
+   * exactly what it ticks — {@code caldav.admin.servers.preset.bluemind.summary}
+   * — so widening the preset is a product-copy change and not only a list
+   * edit, which is why the two were out of step for one commit. They are held
+   * together now by two assertions of the whole string, one where each is
+   * produced ({@code CaldavServerServiceTest}, {@code serverPresets.test.js}),
+   * and by the summary pin that fails a tick without a sentence and a
+   * sentence without a tick. Nothing mechanical can tie a Java enum to a JS
+   * map; two literals that must match is what makes a drift fail a test
+   * instead of reaching an administrator, who would otherwise meet a
+   * drawer-declared row and a seeded row disagreeing about the same server.
    *
    * <p>
    * <b>Why the seed names them at all.</b> The preset is offered on a
