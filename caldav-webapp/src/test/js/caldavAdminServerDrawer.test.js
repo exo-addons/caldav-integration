@@ -70,6 +70,13 @@ describe('CaldavAdminServerDrawer', () => {
   };
 
   /**
+   * What the foreign-writer read answers for the next mount (EXO-89824). A
+   * module-level fixture rather than a mount argument, so the scenarios that
+   * ignore it read exactly as they did before this section existed.
+   */
+  let foreignWriters = [];
+
+  /**
    * Mounts the drawer with the platform's own pieces stubbed, and a $t that
    * reads its receiver exactly as eXo's does — which is the whole point: a
    * translator torn off its instance must break this test, because that is what
@@ -94,6 +101,10 @@ describe('CaldavAdminServerDrawer', () => {
           // is enough - but the method has to exist, because open() calls it before
           // any of these scenarios starts.
           getCaldavServerProviderConfig: () => Promise.resolve({}),
+          // Same contract, same reason (EXO-89824): open() asks for it on every
+          // stored row, so the method has to exist whether or not a scenario
+          // cares about the answer. Scenarios that do care override it.
+          getCaldavServerForeignWriters: () => Promise.resolve(foreignWriters),
         },
         // Put on Vue.prototype by commons-exo-extension's own module, which the
         // server drawer declares as a dependency and reads once on created(). Stated
@@ -349,6 +360,104 @@ describe('CaldavAdminServerDrawer', () => {
 
     await wrapper.vm.saveServer();
     expect(saved[0].payload.mirrorTarget).toBe('DEDICATED_CALENDAR');
+  });
+
+  /**
+   * Lets the drawer's opening reads resolve and the view re-render.
+   *
+   * <p>The foreign-deployment section is filled from a promise, so a single
+   * tick shows the state the drawer opened with rather than the one it settles
+   * on — a test asserting on it without this passes against an empty section
+   * whatever the read returned.</p>
+   *
+   * @param {Object} wrapper the mounted drawer
+   * @returns {Promise} resolved once the section reflects the read
+   */
+  async function settle(wrapper) {
+    await new Promise(resolve => setTimeout(resolve));
+    await wrapper.vm.$nextTick();
+  }
+
+  /**
+   * Mounts the drawer with the foreign-deployment read refusing, everything
+   * else as usual — the only difference from {@link mountDrawer}.
+   *
+   * @param {Array} saved collects what the drawer saves
+   * @returns {Object} the wrapper
+   */
+  function mountDrawerWithFailingForeignRead(saved) {
+    const wrapper = mountDrawer(saved);
+    wrapper.vm.$agendaCaldavService.getCaldavServerForeignWriters = () => Promise.reject(new Error('unreachable'));
+    return wrapper;
+  }
+
+  it('says nothing has been seen writing here, in the same shape as when something has', async () => {
+    // The healthy case, and the reason the section is always drawn: on a server
+    // only this deployment writes to, an absent section would read as "not
+    // checked" rather than as the good news it is.
+    foreignWriters = [];
+    const wrapper = mountDrawer();
+
+    wrapper.vm.open({...bluemind});
+    await settle(wrapper);
+
+    const text = wrapper.text();
+    expect(text).toContain('caldav.admin.servers.foreignWriters.title');
+    expect(text).toContain('caldav.admin.servers.foreignWriters.none');
+    expect(text).not.toContain('caldav.admin.servers.foreignWriters.subtitle');
+    expect(text).not.toContain('caldav.admin.servers.foreignWriters.resolution');
+  });
+
+  it('names the other deployment, when it was last seen, and what to do about it', async () => {
+    // The condition EXO-89824 exists for, as the rig met it: an acceptance
+    // server and a local deployment writing into one BlueMind account. The
+    // authority is the whole finding, so it is rendered verbatim rather than
+    // through a translation key, and the resolution line is what an
+    // administrator acts on.
+    foreignWriters = [{authority: 'ai-contribution-ft.meeds.io', lastSeen: Date.UTC(2026, 8, 11)}];
+    const wrapper = mountDrawer();
+
+    wrapper.vm.open({...bluemind});
+    await settle(wrapper);
+
+    const text = wrapper.text();
+    expect(text).toContain('ai-contribution-ft.meeds.io');
+    expect(text).toContain('caldav.admin.servers.foreignWriters.subtitle');
+    expect(text).toContain('caldav.admin.servers.foreignWriters.cost');
+    expect(text).toContain('caldav.admin.servers.foreignWriters.resolution');
+    expect(text).not.toContain('caldav.admin.servers.foreignWriters.none');
+  });
+
+  it('offers no control beside a foreign deployment, unlike the behaviours above it', async () => {
+    // Deliberate, and worth pinning: the entries above carry a checkbox because
+    // each is a tolerance an administrator decides about. A foreign deployment
+    // is neither something the server does nor anything to excuse, and a box
+    // next to it would offer a decision nobody has taken - one whose wrong
+    // answer destroys real calendar entries.
+    foreignWriters = [{authority: 'other.example.test:8080', lastSeen: Date.UTC(2026, 8, 11)}];
+    const wrapper = mountDrawer();
+
+    wrapper.vm.open({...bluemind, observedQuirks: []});
+    await settle(wrapper);
+
+    // Nothing is ticked, and the entry still renders: the section is evidence,
+    // not a form.
+    expect(wrapper.text()).toContain('other.example.test:8080');
+    expect(wrapper.vm.observedQuirks).toHaveLength(0);
+  });
+
+  it('opens, and saves, even when the foreign-deployment read fails', async () => {
+    // A drawer that would not open because a read of environment evidence
+    // failed is a drawer nobody can save a server with.
+    const saved = [];
+    const wrapper = mountDrawerWithFailingForeignRead(saved);
+
+    wrapper.vm.open({...bluemind});
+    await settle(wrapper);
+
+    expect(wrapper.text()).toContain('caldav.admin.servers.foreignWriters.none');
+    await wrapper.vm.saveServer();
+    expect(saved[0].method).toBe('update');
   });
 
   it('states a destination on a declaration too, rather than leaving the registry to guess', async () => {
