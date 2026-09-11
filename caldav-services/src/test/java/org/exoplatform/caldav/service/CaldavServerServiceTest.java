@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -67,6 +68,7 @@ import java.util.Map;
 
 import org.exoplatform.caldav.model.CaldavServer;
 import org.exoplatform.caldav.model.ServerQuirk;
+import org.exoplatform.caldav.model.ServerQuirkEffect;
 import org.exoplatform.caldav.model.MirrorTargetKind;
 import org.exoplatform.caldav.storage.CaldavServerStorage;
 import org.exoplatform.services.connector.credentials.ConnectorCredentialsException;
@@ -692,6 +694,40 @@ public class CaldavServerServiceTest {
     // And only BlueMind moves: Stalwart's dedicated calendar has no such cost,
     // and the caution on the option stands everywhere it is not answered.
     assertEquals(MirrorTargetKind.DEDICATED_CALENDAR, stalwart.getValue().getMirrorTarget());
+  }
+
+  /**
+   * The one entry shape the seed cannot write, held shut here because nothing
+   * else would notice it.
+   *
+   * <p>
+   * {@code seedExcusals} filters to {@link ServerQuirkEffect#TOLERATE} and is
+   * only ever asked for the two tolerance columns; the seed passes
+   * {@code null} for {@code omittedProperties}. So an {@link
+   * ServerQuirkEffect#OMIT} entry added to {@link
+   * CaldavServerService#BLUEMIND_SEED_QUIRKS} would be dropped by that filter
+   * with nothing routing it anywhere else: the constant would name a behaviour
+   * the seed does not write, <b>with no compile error and no test failure</b>
+   * — the row would simply arrive missing it, on every fresh install, and the
+   * first symptom would be a copy eXo wrote carrying a property the preset of
+   * the same name leaves out.
+   *
+   * <p>
+   * The browser path does not share the hole: {@code serverPresets.js} walks
+   * {@code QUIRKS[quirkId].list} and {@code omitsSoloOrganizer} maps to the
+   * omitted list, so a preset naming it writes it. Asserting the absence is
+   * the smaller of the two closures — the constant carries no such entry today
+   * and the seed has no third column to fill — and it fails the moment someone
+   * adds one, which is the moment the decision has to be taken.
+   */
+  @Test
+  public void shouldSeedNoEntryThatWouldBeWrittenNowhere() {
+    for (ServerQuirk quirk : CaldavServerService.BLUEMIND_SEED_QUIRKS) {
+      assertNotEquals(ServerQuirkEffect.OMIT,
+                      quirk.getEffect(),
+                      quirk.name() + " is an OMIT entry: the seed writes it nowhere. Route OMIT entries to"
+                          + " omittedProperties in seedExcusals before naming one here.");
+    }
   }
 
   /**

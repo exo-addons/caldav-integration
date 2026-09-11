@@ -420,6 +420,37 @@ public class IcsEquivalence {
    * to {@code 9} are outside the set and register, and {@code PRIORITY} is
    * still not excusable by name anywhere — a name-level excusal would admit
    * {@code 1} and {@code 9} along with {@code 5}, and never expire.
+   *
+   * <p>
+   * <b>What this map costs, said plainly, because it is the wider of the two
+   * instruments and the one that cannot be taken back.</b> It is a
+   * {@code private static final Map} with no {@code @Value} and no setter —
+   * unlike {@link #ignoredProperties} and {@link #droppedProperties}, which a
+   * deployment sets through {@code exo.agenda.caldav.mirror.*}, and unlike a
+   * registration's own two columns, which an administrator unticks in the
+   * drawer. So the tolerance is <b>deployment-wide and has no operator
+   * lever</b>: a deployment that finds a server where {@code PRIORITY:5} does
+   * mean "medium, and somebody chose it" cannot restore strictness without a
+   * release. That was accepted rather than overlooked — eXo writes no
+   * {@code PRIORITY} at all, so no value of it can be preserved, and a
+   * reported divergence leads to a repair that overwrites whatever the user
+   * set — but the argument is about {@code 1}..{@code 9} and the tolerance is
+   * about {@code 5}, so the two do not cover each other. Making this entry
+   * {@code @Value}-backed like the two excusal lists is the change that would
+   * add the lever, and it adds a public configuration surface with it.
+   *
+   * <p>
+   * <b>And it reaches every component, nested ones included.</b> The lookup
+   * sits in {@link #normaliseProperty(Property, Calendar, Set, Set, Set,
+   * ServerExcusals, boolean)} <i>before</i> the
+   * {@code !recognised.contains(name)} branch and before the nested-excusal
+   * branch under it, so it applies wherever the property sits — a
+   * {@code PRIORITY:5} inside a {@code VALARM}, where RFC 5545 defines no
+   * {@code PRIORITY} at all, folds to nothing exactly as one on the event
+   * does. That is a consequence of the position, not a decision taken about
+   * alarms; it is pinned in
+   * {@code IcsEquivalenceTest#aMediumPriorityInsideAnAlarmFoldsToNothingToo}
+   * so the behaviour is read off a test rather than discovered.
    */
   private static final Map<String, Set<String>> DEFAULT_STATEMENTS  = Map.of("TRANSP",
                                                                              Set.of("OPAQUE"),

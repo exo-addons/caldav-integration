@@ -168,6 +168,19 @@ public class CaldavServerService {
    * {@link #seedExcusals(ServerQuirkDirection)} reads.
    *
    * <p>
+   * <b>How far that reaches, exactly.</b> A widened pattern reaches this seed
+   * and the drawer's own check-boxes, both of which read the catalogue's
+   * {@link ServerQuirk#getPatterns()} — the drawer over REST. It does
+   * <b>not</b> reach the browser's BlueMind preset: {@code serverPresets.js}
+   * carries its own hardcoded {@code QUIRKS} map of the same ids to the same
+   * patterns, because the ids cross a language boundary with no mechanism to
+   * share them. So a widened family is spelled in two places, not one, and
+   * this constant is the single source of truth for the <i>Java</i> side only.
+   * Generating the catalogue as a JS resource would close it and is more
+   * machinery than three constants justify; what must not happen is the JS
+   * quietly falling behind, so {@code QUIRKS} carries the reciprocal note.
+   *
+   * <p>
    * <b>Fresh installs only, like everything the seeding does.</b> A row
    * already declared keeps what was copied into it on the day it was
    * declared, whatever this list says now — that is the design the preset
@@ -280,8 +293,12 @@ public class CaldavServerService {
    * the preset an administrator is about to apply to the very same row would
    * be teaching two answers to one question.
    * <p>
-   * {@code answerLinksInCopy} is left at the model's default, which happens to
-   * equal the preset's value, so nothing is stated twice.</li>
+   * {@code answerLinksInCopy} is stated rather than defaulted — the model is
+   * built positionally through its all-arguments constructor, so the field
+   * initialiser is overwritten whatever the seed passes, and the seed passes
+   * {@code true}. It happens to be the model's own default and the preset's
+   * value too, so the three agree; it is simply stated twice rather than
+   * once.</li>
    * </ul>
    *
    * <p>
@@ -380,22 +397,78 @@ public class CaldavServerService {
    * filed under the wrong column.
    *
    * <p>
+   * <b>"Neither tolerance list" means written nowhere — do not add an
+   * {@code OMIT} entry to {@link #BLUEMIND_SEED_QUIRKS} without extending this
+   * method.</b> The seed asks for the two tolerance columns and passes
+   * {@code null} for {@code omittedProperties}, so an {@code OMIT} entry would
+   * be dropped by the filter above with nothing routing it to a third column:
+   * the constant would name a behaviour the seed does not write, with no
+   * compile error and no test failure. The browser path does not behave this
+   * way — {@code serverPresets.js} walks {@code QUIRKS[quirkId].list} and
+   * {@code omitsSoloOrganizer} maps to the omitted list, so a preset naming it
+   * writes it. The gap is held shut by
+   * {@code CaldavServerServiceTest#shouldSeedNoEntryThatWouldBeWrittenNowhere},
+   * which fails the moment such an entry is added.
+   *
+   * <p>
    * The separator is the comma {@link ServerQuirk#listMatches(String, String)}
    * splits on and {@code serverQuirks.js} joins with, so the row reads back
    * exactly as one an administrator ticked.
    *
-   * @param direction which way the divergences the list excuses point
-   * @return the comma-joined patterns, empty when no seed entry points that
-   *         way — never null, since null means "never asked" and falls back
-   *         to the deployment-wide property
+   * @param column which of the two tolerance columns is being filled, named by
+   *          the direction that files an entry into it — {@code ADDED} for the
+   *          ignored list, {@code DROPPED} for the dropped one. Only those two
+   *          are columns; {@code REWRITTEN} names no column of its own, which
+   *          is what {@link #toleranceColumn(ServerQuirkDirection)} says.
+   * @return the comma-joined patterns, empty when no seed entry belongs in
+   *         that column — never null, since null means "this server has never
+   *         been asked" and falls back to the deployment-wide property, while
+   *         an empty string is this row's own "excuse nothing here" and blocks
+   *         that fallback. Both readers agree on it:
+   *         {@code ServerExcusals.of} keeps a non-null server value whatever
+   *         it holds and {@code ServerQuirk.listMatches} matches nothing in a
+   *         blank one, and {@code CaldavServerQuirkService.effective} takes
+   *         the same branch. <b>Stated with one limit</b>: that contract lives
+   *         in the Java readers, not in the column. An RDBMS that folds an
+   *         empty string into NULL on write — Oracle does exactly that for
+   *         {@code VARCHAR2}/{@code NVARCHAR2} — would read the row back as
+   *         "never asked" and silently restore the global fallback. Untested
+   *         here, and moot for this seed, whose two columns both carry
+   *         patterns; it bites the row an administrator empties by unticking
+   *         the last box, and the {@code ''} {@code serverPresets.js} writes
+   *         for Stalwart. Worth one round-trip check on Oracle before the
+   *         empty string is relied on as an answer.
    */
-  private static String seedExcusals(ServerQuirkDirection direction) {
-    boolean added = direction == ServerQuirkDirection.ADDED;
+  private static String seedExcusals(ServerQuirkDirection column) {
     return BLUEMIND_SEED_QUIRKS.stream()
                                .filter(quirk -> quirk.getEffect() == ServerQuirkEffect.TOLERATE)
-                               .filter(quirk -> (quirk.getDirection() == ServerQuirkDirection.ADDED) == added)
+                               .filter(quirk -> toleranceColumn(quirk.getDirection()) == column)
                                .flatMap(quirk -> quirk.getPatterns().stream())
                                .collect(Collectors.joining(","));
+  }
+
+  /**
+   * Which tolerance column an entry's direction files it under, written as the
+   * same switch {@code CaldavServerQuirkService.listFor} uses, so the two
+   * cannot drift.
+   *
+   * <p>
+   * There are three directions and two columns, and spelling the collapse out
+   * is the point: {@code REWRITTEN} shares the dropped list with
+   * {@code DROPPED} — the invitation text BlueMind rewrites is excused by the
+   * same column as the conference link it drops. Testing
+   * {@code direction == ADDED} would compute the same answer while reading as
+   * though a {@code REWRITTEN} column existed somewhere.
+   *
+   * @param direction the direction an entry declares
+   * @return {@code ADDED} for the ignored column, {@code DROPPED} for the
+   *         dropped one — never {@code REWRITTEN}
+   */
+  private static ServerQuirkDirection toleranceColumn(ServerQuirkDirection direction) {
+    return switch (direction) {
+      case ADDED -> ServerQuirkDirection.ADDED;
+      case DROPPED, REWRITTEN -> ServerQuirkDirection.DROPPED;
+    };
   }
 
   /**
