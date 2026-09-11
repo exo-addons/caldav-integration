@@ -665,6 +665,17 @@ public class CaldavServerServiceTest {
     assertTrue(ServerQuirk.listMatches(ignored, "X-ALT-DESC"), ignored);
     assertTrue(ServerQuirk.listMatches(ignored, "X-MOZ-LASTACK"), ignored);
     assertTrue(ServerQuirk.listMatches(ignored, "X-MICROSOFT-CDO-BUSYSTATUS"), ignored);
+    // STAMPS_DEFAULT_PRIORITY points ADDED too, so the priority BlueMind
+    // stamps on every copy is excused on the seeded row with no administrator
+    // action — which is the whole of EXO-89828 once the tolerance moved off
+    // the comparison and onto the server that does it. Asserted through
+    // listMatches for the same reason as its neighbours: what is pinned is
+    // that a copy carrying PRIORITY would be excused here, not that a literal
+    // was copied into a column.
+    assertTrue(ServerQuirk.listMatches(ignored, "PRIORITY"), ignored);
+    // And in the ignored column specifically, since that is the one
+    // ServerExcusals.excuse consults for a property the server ADDS.
+    assertFalse(ServerQuirk.listMatches(dropped, "PRIORITY"), dropped);
     // DROPS_CONFERENCE points DROPPED, so it lands in the dropped list.
     assertTrue(ServerQuirk.listMatches(dropped, "CONFERENCE"), dropped);
     // And the columns are not confused with each other.
@@ -691,6 +702,11 @@ public class CaldavServerServiceTest {
     verify(caldavServerStorage).createSeedServer(stalwart.capture(), eq(CaldavServerService.CALDAV_PROVIDER_NAME));
     assertNull(stalwart.getValue().getIgnoredProperties());
     assertNull(stalwart.getValue().getDroppedProperties());
+    // The scoping, said as an assertion rather than only as a null: the
+    // priority excusal reaches the server observed to stamp one and no other.
+    // A server that stamps nothing goes on reporting a priority somebody set,
+    // which is what the per-server route buys over a rule about the value.
+    assertFalse(ServerQuirk.listMatches(stalwart.getValue().getIgnoredProperties(), "PRIORITY"));
     // And only BlueMind moves: Stalwart's dedicated calendar has no such cost,
     // and the caution on the option stands everywhere it is not answered.
     assertEquals(MirrorTargetKind.DEDICATED_CALENDAR, stalwart.getValue().getMirrorTarget());

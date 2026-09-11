@@ -145,9 +145,24 @@ public class CaldavServerService {
 
   /**
    * The catalogue entries the seeded BlueMind row arrives excused for: the
-   * three behaviours a live account was characterised with across EXO-89716
-   * to EXO-89775, and the same three the browser's BlueMind preset ticks on a
-   * declaration ({@code serverPresets.js}).
+   * behaviours a live account was characterised with across EXO-89716 to
+   * EXO-89828 — the three the browser's BlueMind preset ticks on a declaration
+   * ({@code serverPresets.js}), plus
+   * {@link ServerQuirk#STAMPS_DEFAULT_PRIORITY}.
+   *
+   * <p>
+   * <b>That fourth entry is a divergence from the preset, and a deliberate
+   * one to leave visible rather than to hide.</b> The priority stamp was
+   * characterised on the same account as the other three (EXO-89828) and
+   * belongs in the seed for the same reason they do; it is not in the preset
+   * because a preset also carries a <i>summary sentence</i> naming exactly
+   * what it ticks — {@code caldav.admin.servers.preset.bluemind.summary},
+   * pinned in both directions by {@code serverPresets.test.js} — so widening
+   * the preset is a product-copy change and not only a list edit. Until that
+   * is taken, a row declared through the drawer's BlueMind preset arrives
+   * excused for three behaviours and the seeded row for four, and the
+   * administrator meets the fourth the ordinary way: the sweep observes it on
+   * their own server and the drawer offers it with its cost.
    *
    * <p>
    * <b>Why the seed names them at all.</b> The preset is offered on a
@@ -189,7 +204,8 @@ public class CaldavServerService {
    */
   static final List<ServerQuirk>   BLUEMIND_SEED_QUIRKS          = List.of(ServerQuirk.DROPS_CONFERENCE,
                                                                              ServerQuirk.ADDS_COMPATIBILITY_MARKERS,
-                                                                             ServerQuirk.ADDS_FORMATTED_DESCRIPTION);
+                                                                             ServerQuirk.ADDS_FORMATTED_DESCRIPTION,
+                                                                             ServerQuirk.STAMPS_DEFAULT_PRIORITY);
 
   private static final String      SERVER_MANDATORY_MESSAGE      = "caldav.server.mandatory";
 

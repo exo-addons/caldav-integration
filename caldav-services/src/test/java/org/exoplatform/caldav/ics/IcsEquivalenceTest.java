@@ -444,59 +444,13 @@ public class IcsEquivalenceTest {
   @Test
   public void aPriorityAUserSetIsStillAnEdit() {
     // Not everything the alarm and event models fail to parse is the client
-    // indexing itself. PRIORITY is a fact about the meeting a person can set,
-    // and admitting it by name because it arrived through the unrecognised
-    // bucket would hide a real edit: a meeting somebody marked urgent (1) or
-    // low (9) is a different meeting from the one eXo wrote.
-    assertDifferent(EXO.replace("STATUS:CONFIRMED", "PRIORITY:1\r\nSTATUS:CONFIRMED"));
-    assertDifferent(EXO.replace("STATUS:CONFIRMED", "PRIORITY:9\r\nSTATUS:CONFIRMED"));
-  }
-
-  /**
-   * This pin used to say the opposite, over the same value, and the reason it
-   * flipped is the evidence: the 2026-08-31 12:45:01 sweep reported
-   * {@code UNRECOGNISED:PRIORITY=5} in the same comparison as
-   * {@code SUMMARY=test12} against {@code SUMMARY=test121}, a moved
-   * {@code DTEND} and a gained attendee, and the 5 was read as part of that
-   * edit. A later sweep of the same BlueMind account, on a registration with
-   * no excusals at all, reported {@code UNRECOGNISED:PRIORITY=5 (server 1, eXo
-   * 0)} on EVERY stored object, untouched ones included, next to the
-   * {@code X-ALT-DESC} BlueMind adds to every copy — each repaired three
-   * times, then abandoned.
-   *
-   * <p>
-   * A value stamped on everything states nothing about any one meeting: 5 is
-   * the RFC 5545 medium level, what a client writes for "no priority", and on
-   * that server it is what absence looks like once stored. So 5 folds to
-   * nothing exactly as 0 does, while the pin above keeps 1 and 9 as edits.
-   */
-  @Test
-  public void aMediumPriorityTheServerStampedIsNotAnEdit() {
-    assertEquivalent(EXO.replace("STATUS:CONFIRMED", "PRIORITY:5\r\nSTATUS:CONFIRMED"));
-    assertEquivalent(EXO.replace("STATUS:CONFIRMED", "PRIORITY:0\r\nSTATUS:CONFIRMED"));
-  }
-
-  /**
-   * The reach of that tolerance, pinned rather than left to be discovered. The
-   * default-statement lookup sits in {@code normaliseProperty} before the
-   * unrecognised-name branch and before the nested-excusal branch under it, so
-   * it applies wherever the property sits — including inside a {@code VALARM},
-   * where RFC 5545 defines no {@code PRIORITY} at all and the neighbouring pin
-   * {@link #anUnknownPropertyInsideAnAlarmIsStillAnEdit()} shows any other
-   * value of it is still an edit.
-   *
-   * <p>
-   * This is a consequence of where the check sits, not a decision taken about
-   * alarms, and it is the widest thing the tolerance does: the map carries no
-   * {@code @Value} and no setter, so unlike the two excusal lists no
-   * deployment can narrow it back. Whichever way that is settled, it should be
-   * read off a test — if the value ever becomes configurable, or the check
-   * moves below the nested branch, this pin is what says so.
-   */
-  @Test
-  public void aMediumPriorityInsideAnAlarmFoldsToNothingToo() {
-    assertEquivalent(EXO.replace("TRIGGER:-PT15M", "TRIGGER:-PT15M\r\nPRIORITY:5"));
-    assertEquivalent(EXO.replace("TRIGGER:-PT15M", "TRIGGER:-PT15M\r\nPRIORITY:0"));
+    // indexing itself. The same sweep — 2026-08-31 12:45:01, one BlueMind copy
+    // — reported UNRECOGNISED:PRIORITY=5 in the same comparison that reported
+    // SUMMARY=test12 against SUMMARY=test121, a moved DTEND and an attendee
+    // the copy had gained. Somebody had edited that meeting; PRIORITY is a
+    // fact about it that a person set, and admitting it because it arrived
+    // through the unrecognised bucket would have hidden half the edit.
+    assertDifferent(EXO.replace("STATUS:CONFIRMED", "PRIORITY:5\r\nSTATUS:CONFIRMED"));
   }
 
   @Test
@@ -544,10 +498,7 @@ public class IcsEquivalenceTest {
     // The rule admits one name, not a bucket. A property the alarm model does
     // not recognise is still a difference wherever it appears, which is what
     // keeps "ignore anything we failed to parse" from being what was written.
-    // The value is a set priority rather than the medium one: 5 is a default
-    // statement wherever it sits (see aMediumPriorityTheServerStampedIsNotAnEdit),
-    // and what this pin is about is the unknown name, not the default value.
-    assertDifferent(EXO.replace("TRIGGER:-PT15M", "TRIGGER:-PT15M\r\nPRIORITY:1"));
+    assertDifferent(EXO.replace("TRIGGER:-PT15M", "TRIGGER:-PT15M\r\nPRIORITY:5"));
   }
 
   // ------------------------------------------- names, and who they belong to

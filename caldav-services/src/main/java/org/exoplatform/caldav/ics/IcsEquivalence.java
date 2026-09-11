@@ -369,12 +369,11 @@ public class IcsEquivalence {
   private static final Set<String>         IGNORED_ALARM_PROPERTIES = Set.of("UID", "ACKNOWLEDGED", "X-WR-ALARMUID");
 
   /**
-   * Statements equal to their own absence, per the RFC 5545 defaults — each
-   * property with the set of values that say nothing. eXo writes
+   * Statements equal to their own absence, per the RFC 5545 defaults. eXo writes
    * {@code TRANSP:OPAQUE} explicitly and a server is free to drop it as
    * redundant; it writes none of the other three, and a server is free to add
-   * them at their default. A value outside the set is not here, so it still
-   * registers — {@code SEQUENCE:1} means a client edited the object.
+   * them at their default. A non-default value of any of them is not here, so it
+   * still registers — {@code SEQUENCE:1} means a client edited the object.
    *
    * <p>
    * <b>And that last sentence was measured, not assumed (EXO-89828).</b> The
@@ -382,84 +381,26 @@ public class IcsEquivalence {
    * {@code UNRECOGNISED:SEQUENCE=1} on one BlueMind copy — in the same
    * comparison that reported {@code SUMMARY=test12} against
    * {@code SUMMARY=test121}, a moved {@code DTEND} and an attendee the copy had
-   * gained. Somebody had edited that meeting in a client, and {@code SEQUENCE}
-   * is the fingerprint of the edit: the organizer's own count of how many
-   * times the meeting has changed. {@code PRIORITY} is a fact about the
-   * meeting a person can set. Neither is a client indexing itself, so neither
-   * is admitted anywhere by name — not to {@link #IGNORED_EVENT_PROPERTIES},
-   * not to {@link #IGNORED_ALARM_PROPERTIES}, and not by any rule about the
+   * gained. Somebody had edited that meeting in a client, and those two
+   * statements are the fingerprint of the edit: {@code PRIORITY} is a fact
+   * about the meeting a person set, and {@code SEQUENCE} is the organizer's own
+   * count of how many times the meeting has changed. Neither is a client
+   * indexing itself, so neither is admitted anywhere — not to
+   * {@link #IGNORED_EVENT_PROPERTIES}, not to
+   * {@link #IGNORED_ALARM_PROPERTIES}, and not by any rule about the
    * unrecognised bucket they happen to arrive in. Their <i>defaults</i> are
    * excused here and that is the whole of the tolerance they get: a server
-   * spelling out {@code SEQUENCE:0} states nothing, and any other value
-   * states an edit that must be seen.
-   *
-   * <p>
-   * <b>{@code PRIORITY} has two spellings of "unset", and reading {@code 5} as
-   * the edit was narrower than it looked.</b> RFC 5545 §3.8.1.9 gives
-   * {@code 0} as "undefined" and, in the mapping it describes for calendar
-   * user agents, {@code 5} as the medium level — the value a client that
-   * offers "normal / high / low" writes for the one nobody chose. The
-   * 2026-08-31 reading took the {@code 5} for part of the edit because it
-   * arrived in the same comparison as the edit; it was only ever
-   * <i>co-located</i> with it. A later sweep of the same account, on a
-   * registration carrying no excusals at all, reported
-   * {@code UNRECOGNISED:PRIORITY=5 (server 1, eXo 0)} on <i>every</i> stored
-   * object, untouched ones included — beside {@code X-ALT-DESC}, the HTML
-   * rendering BlueMind adds to every copy — and each was repaired three times
-   * and then abandoned. A value stamped on everything states nothing about
-   * any one meeting: on that server {@code 5} is what "no priority" looks
-   * like once stored, and a copy carrying it says exactly what eXo wrote.
-   * Nothing in this repository's captured corpus settles the convention
-   * further — no golden object carries a {@code PRIORITY} at all, and
-   * Stalwart stores an eXo write without adding one — so the tolerance is the
-   * observed value and the RFC's own reading of it, no wider.
-   *
-   * <p>
-   * What survives of the first reading is what mattered in it: a priority
-   * somebody <i>set</i> is still an edit. {@code 1} to {@code 4} and {@code 6}
-   * to {@code 9} are outside the set and register, and {@code PRIORITY} is
-   * still not excusable by name anywhere — a name-level excusal would admit
-   * {@code 1} and {@code 9} along with {@code 5}, and never expire.
-   *
-   * <p>
-   * <b>What this map costs, said plainly, because it is the wider of the two
-   * instruments and the one that cannot be taken back.</b> It is a
-   * {@code private static final Map} with no {@code @Value} and no setter —
-   * unlike {@link #ignoredProperties} and {@link #droppedProperties}, which a
-   * deployment sets through {@code exo.agenda.caldav.mirror.*}, and unlike a
-   * registration's own two columns, which an administrator unticks in the
-   * drawer. So the tolerance is <b>deployment-wide and has no operator
-   * lever</b>: a deployment that finds a server where {@code PRIORITY:5} does
-   * mean "medium, and somebody chose it" cannot restore strictness without a
-   * release. That was accepted rather than overlooked — eXo writes no
-   * {@code PRIORITY} at all, so no value of it can be preserved, and a
-   * reported divergence leads to a repair that overwrites whatever the user
-   * set — but the argument is about {@code 1}..{@code 9} and the tolerance is
-   * about {@code 5}, so the two do not cover each other. Making this entry
-   * {@code @Value}-backed like the two excusal lists is the change that would
-   * add the lever, and it adds a public configuration surface with it.
-   *
-   * <p>
-   * <b>And it reaches every component, nested ones included.</b> The lookup
-   * sits in {@link #normaliseProperty(Property, Calendar, Set, Set, Set,
-   * ServerExcusals, boolean)} <i>before</i> the
-   * {@code !recognised.contains(name)} branch and before the nested-excusal
-   * branch under it, so it applies wherever the property sits — a
-   * {@code PRIORITY:5} inside a {@code VALARM}, where RFC 5545 defines no
-   * {@code PRIORITY} at all, folds to nothing exactly as one on the event
-   * does. That is a consequence of the position, not a decision taken about
-   * alarms; it is pinned in
-   * {@code IcsEquivalenceTest#aMediumPriorityInsideAnAlarmFoldsToNothingToo}
-   * so the behaviour is read off a test rather than discovered.
+   * spelling out {@code PRIORITY:0} or {@code SEQUENCE:0} states nothing, and
+   * any other value states an edit that must be seen.
    */
-  private static final Map<String, Set<String>> DEFAULT_STATEMENTS  = Map.of("TRANSP",
-                                                                             Set.of("OPAQUE"),
+  private static final Map<String, String> DEFAULT_STATEMENTS       = Map.of("TRANSP",
+                                                                             "OPAQUE",
                                                                              "SEQUENCE",
-                                                                             Set.of("0"),
+                                                                             "0",
                                                                              "CLASS",
-                                                                             Set.of("PUBLIC"),
+                                                                             "PUBLIC",
                                                                              "PRIORITY",
-                                                                             Set.of("0", "5"));
+                                                                             "0");
 
   /**
    * Parameters that are read but never compared.
@@ -1122,7 +1063,7 @@ public class IcsEquivalence {
       // value somebody wrote.
       return List.of();
     }
-    if (DEFAULT_STATEMENTS.getOrDefault(name, Set.of()).contains(value)) {
+    if (value.equals(DEFAULT_STATEMENTS.get(name))) {
       return List.of();
     }
     if (!recognised.contains(name)) {
