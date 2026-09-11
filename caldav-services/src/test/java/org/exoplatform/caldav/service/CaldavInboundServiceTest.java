@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.lenient;
@@ -85,7 +86,6 @@ import org.exoplatform.caldav.model.ObjectSync;
 import org.exoplatform.caldav.model.SyncOrigin;
 import org.exoplatform.caldav.storage.CaldavConnectorStorage;
 import org.exoplatform.caldav.storage.CaldavSyncStorage;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 /**
  * Bringing a collection's events into the calendar standing for it.
@@ -829,6 +829,65 @@ public class CaldavInboundServiceTest {
     // A cancelled occurrence carrying the series rule would be a second
     // series, and agenda warns about exactly that shape.
     assertNull(emptied.getRecurrence());
+  }
+
+  /**
+   * The occurrence half of EXO-90190. An override amends an occurrence through
+   * the series' object, so the change is announced as the server's own under
+   * the <em>series'</em> mapping — the occurrence has none — before agenda is
+   * asked. Announced under 0 instead, the ledger ignores it and the amended
+   * occurrence is written back to the very copy it was read from, for every
+   * recurring event.
+   */
+  @Test
+  public void anAmendedOccurrenceIsAnnouncedUnderTheSeriesMappingBeforeAgendaIsAsked() throws Exception {
+    givenServerObjects(object("o1.ics", "etag-2", SERIES));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(event(501L));
+    Event moved = new Event();
+    moved.setId(777L);
+    Event cancelled = new Event();
+    cancelled.setId(888L);
+    when(agendaEventService.saveEventExceptionalOccurrence(eq(501L), any())).thenReturn(moved).thenReturn(cancelled);
+
+    service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+
+    InOrder order = inOrder(caldavEventPropagationService, agendaEventService);
+    order.verify(caldavEventPropagationService).changedOnTheServer(777L, 1L);
+    order.verify(agendaEventService)
+         .updateEvent(argThat(e -> e.getId() == 777L), any(), any(), any(), any(), any(), eq(false), eq(USER));
+    verify(caldavEventPropagationService, never()).notChangedAfterAll(anyLong());
+  }
+
+  /**
+   * The same for the other occurrence path: a cancelled date is announced
+   * under the series' mapping before agenda is asked to mark it cancelled.
+   */
+  @Test
+  public void aCancelledOccurrenceIsAnnouncedUnderTheSeriesMappingBeforeAgendaIsAsked() throws Exception {
+    givenServerObjects(object("o1.ics", "etag-2", SERIES));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(event(501L));
+    Event moved = new Event();
+    moved.setId(777L);
+    Event cancelled = new Event();
+    cancelled.setId(888L);
+    when(agendaEventService.saveEventExceptionalOccurrence(eq(501L), any())).thenReturn(moved).thenReturn(cancelled);
+
+    service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+
+    InOrder order = inOrder(caldavEventPropagationService, agendaEventService);
+    order.verify(caldavEventPropagationService).changedOnTheServer(888L, 1L);
+    order.verify(agendaEventService)
+         .updateEvent(argThat(e -> e.getId() == 888L && e.getStatus() == EventStatus.CANCELLED),
+                      any(),
+                      any(),
+                      any(),
+                      any(),
+                      any(),
+                      eq(false),
+                      eq(USER));
+    verify(caldavEventPropagationService, never()).notChangedAfterAll(anyLong());
   }
 
   @Test

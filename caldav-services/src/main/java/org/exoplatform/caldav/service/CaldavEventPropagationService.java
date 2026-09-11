@@ -178,20 +178,31 @@ public class CaldavEventPropagationService {
   private static final int                                     RETRY_BATCH         = 200;
 
   /**
-   * How long a change announced as the server's own stays announced.
+   * How long a change announced as the server's own stays announced, in
+   * seconds.
    *
    * <p>
    * The announcement is consumed by the first broadcast that meets it, so in
    * the ordinary case it lives for the few milliseconds between agenda saving
    * the event and the listener running. The bound is for the case where that
    * broadcast never arrives — a listener running with no container, or agenda
-   * throwing before it broadcasts — because an announcement that outlived its
-   * broadcast would silence the next genuine edit of the same event, and
-   * silencing a genuine edit is the one thing this must never do. Five minutes
-   * is long enough for any listener queue and short enough that such a leak
-   * costs one redundant rewrite at most, which is the state before EXO-90190.
+   * throwing before it broadcasts. An announcement that outlived its broadcast
+   * is honoured by the next genuine edit of the same event made in eXo: that
+   * edit is <em>not</em> written to the origin holder's copy, and because the
+   * origin is taken out of the holders before the obligations are recorded
+   * ({@code leaveOrigin}), it is not owed to them either, so the retry pass
+   * never carries it. Nothing else does: the mirror verification reads back
+   * MIRROR pairs only, and the origin of a remote change is a REMOTE pair. So
+   * a leak costs one <em>missing</em> rewrite — one attendee's copy stays a
+   * step behind until the event is edited again — which is why the window is
+   * short. Five minutes is long enough for any listener queue and no longer.
+   *
+   * <p>
+   * Injected so a test can drive it to zero; there is no deployment reason to
+   * change it.
    */
-  private static final Duration                                FROM_SERVER_FOR     = Duration.ofMinutes(5);
+  @Value("${exo.agenda.caldav.push.fromServerSeconds:300}")
+  private long                                                 fromServerSeconds;
 
   /**
    * The modifications a copy cannot show, so no copy is rewritten for them
@@ -286,6 +297,13 @@ public class CaldavEventPropagationService {
    * announcement and the broadcast that consumes it always meet here. A
    * {@code ThreadLocal} would not do — every propagation listener is
    * {@code @Asynchronous}, and the broadcast is handled on another thread.
+   *
+   * <p>
+   * One entry per event, the latest announcement winning: a space meeting held
+   * in two users' mirrors can be announced by two passes in the same window,
+   * and the second announcement replaces the first, so one of the two
+   * broadcasts leaves out the wrong copy — one redundant PUT and an etag bump
+   * on a copy that already carries the content, never a duplicate object.
    */
   private final Map<Long, FromServer>                          fromServer          = new ConcurrentHashMap<>();
 
@@ -332,8 +350,9 @@ public class CaldavEventPropagationService {
       return;
     }
     Instant now = Instant.now();
-    fromServer.values().removeIf(origin -> origin.until().isBefore(now));
-    fromServer.put(eventId, new FromServer(objectSyncId, now.plus(FROM_SERVER_FOR)));
+    fromServer.values().removeIf(origin -> !origin.until().isAfter(now));
+    // Replaces, never accumulates: see the field for what a crossed pass costs.
+    fromServer.put(eventId, new FromServer(objectSyncId, now.plus(Duration.ofSeconds(fromServerSeconds))));
   }
 
   /**
@@ -359,7 +378,7 @@ public class CaldavEventPropagationService {
    */
   private Long originOf(long eventId) {
     FromServer origin = fromServer.remove(eventId);
-    if (origin == null || origin.until().isBefore(Instant.now())) {
+    if (origin == null || !origin.until().isAfter(Instant.now())) {
       return null;
     }
     return origin.objectSyncId();
@@ -370,7 +389,7 @@ public class CaldavEventPropagationService {
    * and when the announcement stops being trusted.
    *
    * @param objectSyncId the mapping the change came through
-   * @param until when the announcement expires
+   * @param until the instant from which the announcement is no longer trusted
    */
   private record FromServer(long objectSyncId, Instant until) {
   }
@@ -856,15 +875,18 @@ public class CaldavEventPropagationService {
     // gone by the time this event is broadcast, so there is nothing left to
     // read a parent from.
     Map<Long, ObjectSync> holders = holdersOf(eventId, false);
-    // The object the deletion was read from is already gone from the server;
-    // asking the server to remove it again is the echo EXO-90190 stops, and
-    // owing that removal would leave a retry chasing a mapping the inbound
-    // pass drops right after this.
-    int skipped = leaveOrigin(holders, origin, eventId);
     if (holders.isEmpty()) {
       LOG.debug("Event {} was deleted but nobody holds a copy of it; nothing to carry out", eventId);
       return 0;
     }
+    // The object the deletion was read from is already gone from the server;
+    // asking the server to remove it again is the echo EXO-90190 stops, and
+    // owing that removal would leave a retry chasing a mapping the inbound
+    // pass drops right after this. Left out after the empty check, as in
+    // propagateUpdate, so a deletion whose only holder is the origin still
+    // reaches the INFO line below as "0 of 1" rather than a line saying nobody
+    // held a copy.
+    int skipped = leaveOrigin(holders, origin, eventId);
     // Recorded before any of them is attempted, for the reason propagateUpdate
     // gives — and it matters more here: a removal that is not carried out has
     // no other safety net at all, so this record is the only thing standing

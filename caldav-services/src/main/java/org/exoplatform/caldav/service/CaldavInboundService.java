@@ -949,9 +949,10 @@ public class CaldavInboundService {
       // second series running beside the first.
       amended.setRecurrence(null);
       amended.setOccurrence(occurrence.getOccurrence());
-      // The identity stays null here on purpose: the object's UID belongs to
-      // the series, and a record of it on the occurrence would let the
-      // adoption pass offer the occurrence for an identifier the series owns.
+      // The identity stays null here on purpose: an occurrence carries no
+      // identity of its own. The UID is the series', recorded against the
+      // series, and that is the only row either the push or the adoption pass
+      // ever reads — both resolve an occurrence to its series first.
       caldavEventPropagationService.changedOnTheServer(occurrence.getId(), objectSyncId);
       try {
         agendaEventService.updateEvent(amended,

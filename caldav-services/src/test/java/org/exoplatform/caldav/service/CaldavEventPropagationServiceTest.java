@@ -232,6 +232,9 @@ public class CaldavEventPropagationServiceTest {
     // The property is @Value-injected in production and zero here, which would
     // make every obligation look already abandoned.
     ReflectionTestUtils.setField(service, "maxPushAttempts", MAX_ATTEMPTS);
+    // Likewise zero when not injected, which would expire every announcement
+    // before the broadcast that consumes it.
+    ReflectionTestUtils.setField(service, "fromServerSeconds", 300L);
   }
 
   /**
@@ -326,6 +329,26 @@ public class CaldavEventPropagationServiceTest {
     service.notChangedAfterAll(EVENT);
 
     assertEquals(1, service.propagateUpdate(EVENT, A_REAL_EDIT));
+  }
+
+  /**
+   * An announcement whose broadcast never came — agenda threw after saving, a
+   * listener ran with no container — is not honoured once it has expired. The
+   * expiry is the only thing standing between such a leak and the next genuine
+   * edit of the event being kept from the origin holder's copy, which nothing
+   * would repair; here it is driven to zero so the pin does not wait on it.
+   */
+  @Test
+  public void anAnnouncementThatOutlivedItsBroadcastIsNotHonoured() {
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/default/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    when(caldavPushService.pushAgendaEvent(anyLong(), anyString(), eq(EVENT))).thenReturn(new ObjectSync());
+    ReflectionTestUtils.setField(service, "fromServerSeconds", 0L);
+
+    service.changedOnTheServer(EVENT, 1L);
+
+    assertEquals(1, service.propagateUpdate(EVENT, A_REAL_EDIT));
+    verify(caldavPushService).pushAgendaEvent(ALICE, login(ALICE), EVENT);
   }
 
   /**
