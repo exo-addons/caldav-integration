@@ -43,8 +43,12 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.exoplatform.commons.exception.ObjectNotFoundException;
+import org.exoplatform.commons.utils.CommonsUtils;
 import org.exoplatform.container.ExoContainer;
 import org.exoplatform.container.ExoContainerContext;
 import org.exoplatform.container.component.RequestLifeCycle;
@@ -113,6 +117,36 @@ public class CaldavInboundService {
    * would turn a passing outage into stored state someone later has to explain.
    */
   private final Map<Long, Instant> notAnswering = new ConcurrentHashMap<>();
+
+  /**
+   * How a copy eXo wrote names the event it stands for.
+   *
+   * <p>
+   * Both the {@code URL} property and the "Event link" line of the description
+   * carry {@code <deployment>/portal/<site>/agenda?eventId=<id>} — the address
+   * {@code EventIcsBuilder.eventUrl} derives from
+   * {@code NotificationUtils.getEventURL}, whose domain is the deployment's
+   * configured one. Group 1 is that deployment: the authority of the address,
+   * with or without a scheme, because the copy EXO-89824 was diagnosed from
+   * carried its link without one. Nothing but this exact shape is recognised,
+   * so a link to anything else — a conference, an intranet page, another
+   * portal's wiki — is not a copy and is never reported as one.
+   */
+  private static final Pattern EXO_EVENT_LINK =
+                                              Pattern.compile("(?:https?://)?([^/\\s<>\"']+)/portal/[^/\\s<>?]+/agenda\\?eventId=\\d+",
+                                                              Pattern.CASE_INSENSITIVE);
+
+  /**
+   * The accounts already told that another eXo deployment writes into them,
+   * keyed by user and server — see {@link #warnOnceIfAnotherDeploymentWrites}.
+   */
+  private final Set<String>        foreignDeploymentsSaid = ConcurrentHashMap.newKeySet();
+
+  /**
+   * This deployment's own address as its copies name it, kept once resolved —
+   * see {@link #ownDeployment()}. Null until the portal could be asked.
+   */
+  private volatile String          ownDeployment;
 
   @Autowired
   private CalDavClient           calDavClient;
@@ -301,6 +335,7 @@ public class CaldavInboundService {
       return false;
     }
     IcsEvent master = parsed.get(0);
+    warnOnceIfAnotherDeploymentWrites(pair, object, master);
     if (StringUtils.isNotBlank(master.getOccurrenceId())) {
       // An object holding only overrides, with the series living elsewhere.
       // Creating them as events of their own would show the amendments as
@@ -926,6 +961,189 @@ public class CaldavInboundService {
       // but it is a smaller wrong than losing the series over it.
       LOG.warn("Occurrence {} of series {} could not be cancelled", occurrenceId, masterEventId, e);
     }
+  }
+
+  /**
+   * Says once, at warn, that another eXo deployment writes copies into this
+   * account.
+   *
+   * <p>
+   * EXO-89824: an acceptance server and a developer's rig were connected to
+   * one CalDAV account, and each wrote its meeting copies into it. Every
+   * mirror assumes it is the only writer of the copies in its collection —
+   * it lists them, compares each against what eXo would write and repairs what
+   * diverges — and a second deployment breaks that premise, along with every
+   * count and give-up rule that reasons over "the copies in this collection".
+   * The condition is invisible from inside either deployment: a foreign copy
+   * has no row in this database, so no query can see it, and on every screen
+   * it looks like an ordinary event.
+   *
+   * <p>
+   * What tells it apart is the copy itself. eXo names the event a copy stands
+   * for, as a {@code URL} property and as a link in the description, and that
+   * address carries the deployment that wrote it ({@link #EXO_EVENT_LINK}).
+   * It is the one marker known to survive a server's rewriting: the copy this
+   * was diagnosed from was written by one deployment and read, link intact,
+   * on another, where a property of eXo's own invention would be a bet nobody
+   * has verified.
+   *
+   * <p>
+   * <b>Detect and tell, nothing more.</b> Nothing is imported, skipped,
+   * removed or repaired differently for it, which is why this is asked before
+   * any of those decisions and returns nothing. Whether a foreign copy should
+   * be left alone, imported or removed is a product decision nobody has taken,
+   * and the wrong one destroys real calendar entries. The resolution is an
+   * environment one — one of the two deployments moves to a different account —
+   * and the line says so, because that is what an administrator acts on.
+   *
+   * <p>
+   * Conservative on purpose: only an address of eXo's own shape counts, only
+   * when it names a deployment other than this one, and only when this one's
+   * address is known at all. Deployments are told apart by authority — host
+   * and port — of the portal's configured domain ({@code
+   * gatein.email.domain.url}, which an eXo deployment sets from
+   * {@code exo.base.url}), the value the task asked to compare; two
+   * deployments configured with the same address are indistinguishable here,
+   * and a stored instance identity would be needed to tell them apart.
+   *
+   * <p>
+   * Once per account per process, in the shape of the shared-account warning
+   * of EXO-90190; a restart says it again, which is the right bias after a
+   * deploy. Never allowed to fail the import: a warning is not worth a
+   * calendar.
+   *
+   * @param pair the binding being read
+   * @param object the object as the server sent it
+   * @param master the object's parsed event
+   */
+  private void warnOnceIfAnotherDeploymentWrites(CalendarSync pair, CalendarObject object, IcsEvent master) {
+    try {
+      String account = pair.getUserIdentityId() + ":" + pair.getServerId();
+      if (foreignDeploymentsSaid.contains(account)) {
+        return;
+      }
+      String writer = deploymentNamedBy(master);
+      if (writer == null) {
+        return;
+      }
+      String own = ownDeployment();
+      if (own == null || own.equals(writer)) {
+        return;
+      }
+      if (foreignDeploymentsSaid.add(account)) {
+        LOG.warn("Collection {} of user {} on server {} holds a copy written by another eXo deployment: object {} links"
+            + " to {}, and this deployment is {}. Two eXo deployments are writing meeting copies into this CalDAV"
+            + " account, and each believes it owns the copies it verifies and repairs. One of the two should be"
+            + " connected to a different CalDAV account. Nothing is imported, removed or repaired differently on the"
+            + " strength of this line",
+                 pair.getRemoteHref(),
+                 pair.getUserIdentityId(),
+                 pair.getServerId(),
+                 object.href(),
+                 writer,
+                 own);
+      }
+    } catch (RuntimeException e) {
+      LOG.debug("Whether another eXo deployment writes into collection {} could not be told; it is asked again on the next object",
+                pair.getRemoteHref(),
+                e);
+    }
+  }
+
+  /**
+   * The deployment a copy names, or null when the object is not a copy eXo
+   * wrote.
+   *
+   * <p>
+   * The {@code URL} property first, then the description: both carry the same
+   * address, but a copy written by an older add-on carries only the
+   * description's line, and a server that drops a property it does not know
+   * still keeps the text. The label in front of the link is localised, so the
+   * address is matched by its shape rather than by the words around it — which
+   * is also what keeps a server's bracketed repetition of the link (BlueMind
+   * linkifies every URI in a description) from changing the answer.
+   *
+   * @param master the parsed event
+   * @return the authority the copy's event link names, lower-cased, or null
+   *         when the event carries no link of eXo's shape
+   */
+  static String deploymentNamedBy(IcsEvent master) {
+    for (String text : new String[] { master.getEventUrl(), master.getDescription() }) {
+      if (StringUtils.isBlank(text)) {
+        continue;
+      }
+      Matcher link = EXO_EVENT_LINK.matcher(text);
+      if (link.find()) {
+        return link.group(1).toLowerCase(Locale.ROOT);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * This deployment's own address as its copies name it: the authority of the
+   * portal's configured domain, the value {@code EventIcsBuilder.eventUrl}
+   * builds every copy's link from.
+   *
+   * <p>
+   * Asked of the portal only once a copy is in hand, and kept once it
+   * answered: the value is a JVM-wide property that does not change while the
+   * process runs. The portal never leaves it unanswered — a deployment that
+   * configured no domain is given {@code http://localhost:8080} and told so
+   * in its own log — so two deployments that both left it unconfigured, or
+   * both configured the same address, name themselves alike and cannot be
+   * told apart here. Should the call fail all the same, the detection stays
+   * off rather than guess: a deployment that cannot say its own name would
+   * report every copy of its own as somebody else's.
+   *
+   * @return the authority, lower-cased, or null when the portal could not be
+   *         asked or names no domain
+   */
+  private String ownDeployment() {
+    String known = ownDeployment;
+    if (known != null) {
+      return known;
+    }
+    String domain;
+    try {
+      domain = CommonsUtils.getCurrentDomain();
+    } catch (RuntimeException | LinkageError e) {
+      LOG.debug("This deployment's own address could not be resolved; copies of another deployment go unreported", e);
+      return null;
+    }
+    String authority = authorityOf(domain);
+    if (authority != null) {
+      ownDeployment = authority;
+    }
+    return authority;
+  }
+
+  /**
+   * The authority — host and port — of an address, with or without a scheme.
+   *
+   * <p>
+   * {@code http://localhost:8080/}, {@code https://exo.example.test} and
+   * {@code exo.example.test/portal} all answer their host and port alone,
+   * which is the granularity two deployments differ at: a rig and an
+   * acceptance server on one host but different ports are two deployments.
+   *
+   * @param address the address, as configured or as a copy carries it
+   * @return the authority, lower-cased, or null when there is none
+   */
+  static String authorityOf(String address) {
+    if (StringUtils.isBlank(address)) {
+      return null;
+    }
+    String rest = address.trim();
+    int scheme = rest.indexOf("://");
+    if (scheme >= 0) {
+      rest = rest.substring(scheme + 3);
+    }
+    int slash = rest.indexOf('/');
+    if (slash >= 0) {
+      rest = rest.substring(0, slash);
+    }
+    return StringUtils.isBlank(rest) ? null : rest.toLowerCase(Locale.ROOT);
   }
 
   /**

@@ -59,6 +59,9 @@ import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+
 import org.exoplatform.agenda.constant.EventAttendeeResponse;
 import org.exoplatform.agenda.constant.EventStatus;
 import org.exoplatform.agenda.model.Calendar;
@@ -78,9 +81,11 @@ import org.exoplatform.caldav.client.CalDavEndpoint;
 import org.exoplatform.caldav.client.CalDavException;
 import org.exoplatform.caldav.client.CalendarObject;
 import org.exoplatform.caldav.ics.IcsEventMapper;
+import org.exoplatform.caldav.LogRecorder;
 import org.exoplatform.caldav.ics.IcsParser;
 import org.exoplatform.caldav.model.CalendarSync;
 import org.exoplatform.caldav.model.CaldavUserSetting;
+import org.exoplatform.caldav.model.IcsEvent;
 import org.exoplatform.caldav.model.ObjectSync;
 import org.exoplatform.caldav.model.SyncOrigin;
 import org.exoplatform.caldav.storage.CaldavConnectorStorage;
@@ -1606,6 +1611,187 @@ public class CaldavInboundServiceTest {
     copy.setLocalEventId(9001L);
     copy.setRemoteHref(HREF + "copy.ics");
     return copy;
+  }
+
+  // ---------------------------------------------------------------------
+  // EXO-89824 — a copy written by another eXo deployment is recognised by the
+  // deployment its event link names, said once per account at warn, and
+  // changes nothing about what is imported.
+  // ---------------------------------------------------------------------
+
+  /** The address this deployment's own copies carry, as the portal is configured. */
+  private static final String THIS_DEPLOYMENT  = "exo.example.test";
+
+  /** The link of a copy this deployment wrote. */
+  private static final String OWN_LINK         = "https://exo.example.test/portal/dw/agenda?eventId=42";
+
+  /** The link of a copy the acceptance server wrote into the same account. */
+  private static final String FOREIGN_LINK     = "https://acceptance.example.test/portal/dw/agenda?eventId=1";
+
+  /** The fragment every foreign-deployment warning carries. */
+  private static final String FOREIGN_WARNING  = "written by another eXo deployment";
+
+  /**
+   * A copy naming this deployment is this deployment's, and nothing is said.
+   */
+  @Test
+  public void aCopyNamingThisDeploymentIsNotReportedAsAnotherDeploymentsWriting() throws Exception {
+    // The mirror can be pointed at a calendar the inbound half also reads, so
+    // eXo's own copies come back through this path routinely. A warning on
+    // every one of them would be noise that hides the one that matters.
+    givenThisDeploymentIs(THIS_DEPLOYMENT);
+    givenServerObjects(object("o1.ics", "etag-1", copy("uid-1@example.test", "Sprint review", OWN_LINK)));
+    givenAgendaCreates(501L);
+
+    List<ILoggingEvent> said;
+    try (LogRecorder log = new LogRecorder(CaldavInboundService.class)) {
+      service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+      said = foreignDeploymentWarnings(log);
+    }
+
+    assertTrue(said.isEmpty(), () -> said.toString());
+  }
+
+  /**
+   * A copy naming another deployment is said once per account, at warn, and
+   * imported exactly as it would have been.
+   */
+  @Test
+  public void aCopyNamingAnotherDeploymentIsSaidOnceAtWarnAndChangesNothing() throws Exception {
+    // EXO-89824: an acceptance server and a rig connected to one account, each
+    // writing copies the other cannot see in its own database. The copy's own
+    // link is the only thing that tells the two apart, and telling an
+    // administrator is all this does — the resolution is an environment one,
+    // and what to do with the copy is a decision nobody has taken.
+    givenThisDeploymentIs(THIS_DEPLOYMENT);
+    givenServerObjects(object("o1.ics", "etag-1", copy("uid-1@example.test", "test", FOREIGN_LINK)));
+    givenAgendaCreates(501L);
+
+    List<ILoggingEvent> said;
+    try (LogRecorder log = new LogRecorder(CaldavInboundService.class)) {
+      service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+      service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+      said = foreignDeploymentWarnings(log);
+    }
+
+    assertEquals(1, said.size(), "once per account per process, not once per object read");
+    assertEquals(Level.WARN, said.get(0).getLevel());
+    String line = said.get(0).getFormattedMessage();
+    assertTrue(line.contains("acceptance.example.test"), line);
+    assertTrue(line.contains(THIS_DEPLOYMENT), line);
+    assertTrue(line.contains("different CalDAV account"), "the line tells the administrator what to do: " + line);
+    // Detection changes nothing: the copy was imported both times, exactly as
+    // an unrecognised one would have been.
+    verify(agendaEventService, times(2)).createEvent(any(), any(), any(), any(), any(), any(), anyBoolean(), anyLong());
+  }
+
+  /**
+   * An ordinary remote event is never mistaken for a foreign copy, whatever it
+   * links to.
+   */
+  @Test
+  public void anOrdinaryRemoteEventIsNeverMistakenForAForeignCopy() throws Exception {
+    // A link of any other shape — a conference, another portal's page, none at
+    // all — is not eXo's event link, and a deployment that is not named is not
+    // another deployment.
+    givenThisDeploymentIs(THIS_DEPLOYMENT);
+    givenServerObjects(object("o1.ics", "etag-1", copy("uid-1@example.test", "Vendor call", "https://meet.example.test/j/123")),
+                       object("o2.ics", "etag-2", copy("uid-2@example.test", "Wiki review", "https://other.example.test/portal/dw/wiki")),
+                       object("o3.ics", "etag-3", ics("uid-3@example.test", "Dentist")));
+    givenAgendaCreates(501L);
+
+    List<ILoggingEvent> said;
+    try (LogRecorder log = new LogRecorder(CaldavInboundService.class)) {
+      service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+      said = foreignDeploymentWarnings(log);
+    }
+
+    assertTrue(said.isEmpty(), () -> said.toString());
+  }
+
+  /**
+   * The deployment a copy names is read off the link's shape, from either
+   * carrier, scheme or not.
+   */
+  @Test
+  public void theDeploymentACopyNamesIsReadOffItsEventLink() {
+    // The copy EXO-89824 was diagnosed from: read on the rig, written by the
+    // acceptance server, its link carried in the description without a scheme.
+    IcsEvent diagnosed = new IcsEvent();
+    diagnosed.setDescription("Invitation sent by Root Root. Event link: ai-contribution-ft.meeds.io/portal/dw/agenda?eventId=1");
+    assertEquals("ai-contribution-ft.meeds.io", CaldavInboundService.deploymentNamedBy(diagnosed));
+
+    // BlueMind linkifies: the link repeated in angle brackets after itself.
+    IcsEvent linkified = new IcsEvent();
+    linkified.setDescription("Chemistry.\n Event link: http://Host:8080/portal/dw/agenda?eventId=981 <http://Host:8080/portal/dw/agenda?eventId=981>");
+    assertEquals("host:8080", CaldavInboundService.deploymentNamedBy(linkified));
+
+    // The URL property is read first when both are present.
+    IcsEvent both = new IcsEvent();
+    both.setEventUrl(OWN_LINK);
+    both.setDescription("Event link: " + FOREIGN_LINK);
+    assertEquals(THIS_DEPLOYMENT, CaldavInboundService.deploymentNamedBy(both));
+
+    // Not eXo's shape: nothing is named.
+    IcsEvent other = new IcsEvent();
+    other.setEventUrl("https://other.example.test/portal/dw/wiki?eventId=3");
+    other.setDescription("See https://meet.example.test/j/123");
+    assertNull(CaldavInboundService.deploymentNamedBy(other));
+    assertNull(CaldavInboundService.deploymentNamedBy(new IcsEvent()));
+
+    assertEquals("localhost:8080", CaldavInboundService.authorityOf("http://localhost:8080/"));
+    assertEquals("exo.example.test", CaldavInboundService.authorityOf("https://EXO.example.test"));
+    assertNull(CaldavInboundService.authorityOf(" "));
+    assertNull(CaldavInboundService.authorityOf("https:///portal"));
+  }
+
+  /**
+   * States the address this deployment's own copies carry, as the portal would
+   * have resolved it inside a container.
+   *
+   * @param authority host and port of this deployment
+   */
+  private void givenThisDeploymentIs(String authority) {
+    ReflectionTestUtils.setField(service, "ownDeployment", authority);
+  }
+
+  /**
+   * @param log the recorder attached to the inbound service
+   * @return the foreign-deployment warnings it caught, in order
+   */
+  private List<ILoggingEvent> foreignDeploymentWarnings(LogRecorder log) {
+    return log.events()
+              .stream()
+              .filter(recorded -> recorded.getLevel() == Level.WARN
+                  && recorded.getFormattedMessage().contains(FOREIGN_WARNING))
+              .toList();
+  }
+
+  /**
+   * A single-event object as eXo writes a copy: the event link both as the
+   * {@code URL} property and in the description's own line.
+   *
+   * @param uid the object's uid
+   * @param summary its summary
+   * @param link the address the copy links to
+   * @return the calendar data
+   */
+  private String copy(String uid, String summary, String link) {
+    return """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        PRODID:-//Exo Platform//NONSGML v1.0//EN
+        BEGIN:VEVENT
+        DTSTAMP:20261001T080000Z
+        UID:%s
+        DTSTART:20261012T090000Z
+        DTEND:20261012T100000Z
+        SUMMARY:%s
+        DESCRIPTION:Invitation sent by Root Root. Event link: %s
+        URL:%s
+        END:VEVENT
+        END:VCALENDAR
+        """.formatted(uid, summary, link, link);
   }
 
   /**
