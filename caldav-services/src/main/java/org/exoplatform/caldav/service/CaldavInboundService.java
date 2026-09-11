@@ -137,10 +137,29 @@ public class CaldavInboundService {
                                                               Pattern.CASE_INSENSITIVE);
 
   /**
-   * The accounts already told that another eXo deployment writes into them,
-   * keyed by user and server — see {@link #warnOnceIfAnotherDeploymentWrites}.
+   * The (account, deployment) pairs already said at WARN — see
+   * {@link #warnOnceIfAnotherDeploymentWrites}. The deployment is in the key
+   * because an account can hold copies of more than one, and saying only the
+   * first is how a detection latches onto the wrong writer for ever.
    */
   private final Set<String>        foreignDeploymentsSaid = ConcurrentHashMap.newKeySet();
+
+  /**
+   * When each (account, deployment) pair was last recorded on its server's
+   * row, in nanoseconds — see {@link #warnOnceIfAnotherDeploymentWrites}.
+   *
+   * <p>
+   * Separate from {@link #foreignDeploymentsSaid}, and deliberately: the log
+   * line is said once per process, because a second identical line teaches
+   * nobody anything, while the row has to keep being refreshed or the entry
+   * ages out from under a condition that still holds. Stamped only when a
+   * foreign copy is actually found, so an account that has none is examined
+   * exactly as often as it was before this record existed.
+   */
+  private final Map<String, Long>  foreignDeploymentsRecorded = new ConcurrentHashMap<>();
+
+  /** A nanosecond, so the record interval reads in seconds where it is used. */
+  private static final long        NANOS_PER_SECOND           = 1_000_000_000L;
 
   /**
    * This deployment's own address as its copies name it, kept once resolved —
@@ -190,6 +209,27 @@ public class CaldavInboundService {
    */
   @Autowired
   private CaldavAnswerAdoptionService caldavAnswerAdoptionService;
+
+  /**
+   * Where a foreign deployment is recorded so an administrator can see it.
+   */
+  @Autowired
+  private CaldavServerService         caldavServerService;
+
+  /**
+   * How often one account may refresh its server's record of a foreign
+   * deployment.
+   *
+   * <p>
+   * An hour. The record is day-grained and kept for a month, so nothing finer
+   * changes what the drawer shows; what this bounds is a deployment with
+   * hundreds of accounts on one server, each of them sweeping every few
+   * minutes, all writing the same row. It is a throttle on a write, not on the
+   * detection: an account that has never been found to hold a foreign copy is
+   * examined on every object of every pass, exactly as before.
+   */
+  @Value("${exo.agenda.caldav.mirror.foreignWriterRecordSeconds:3600}")
+  private long                        foreignWriterRecordSeconds;
 
   /**
    * How many days one calendar-query asks for. Small enough that a busy
@@ -1018,10 +1058,6 @@ public class CaldavInboundService {
    */
   private void warnOnceIfAnotherDeploymentWrites(CalendarSync pair, CalendarObject object, IcsEvent master) {
     try {
-      String account = pair.getUserIdentityId() + ":" + pair.getServerId();
-      if (foreignDeploymentsSaid.contains(account)) {
-        return;
-      }
       String writer = deploymentNamedBy(master);
       if (writer == null) {
         return;
@@ -1030,7 +1066,22 @@ public class CaldavInboundService {
       if (own == null || own.equals(writer)) {
         return;
       }
-      if (foreignDeploymentsSaid.add(account)) {
+      // Keyed on the WRITER as well as the account, and that is the whole point
+      // of the key. Keyed on the account alone, the first authority ever seen
+      // latched it: a copy this deployment wrote under a different base URL, or
+      // a single ICS imported by hand from another eXo, consumed the budget and
+      // the genuine second writer - the thing this exists to find - was never
+      // reported. Three deployments on one account is the environment EXO-89824
+      // came from, and only one of them would have been named. Bounded all the
+      // same: one entry per authority actually seen on an account, which is a
+      // handful in the worst environment anybody runs.
+      String seen = pair.getUserIdentityId() + ":" + pair.getServerId() + ":" + writer;
+      Long recorded = foreignDeploymentsRecorded.get(seen);
+      if (recorded != null && System.nanoTime() - recorded < foreignWriterRecordSeconds * NANOS_PER_SECOND) {
+        return;
+      }
+      recordForeignWriter(seen, pair.getServerId(), writer);
+      if (foreignDeploymentsSaid.add(seen)) {
         LOG.warn("Collection {} of user {} on server {} holds a copy written by another eXo deployment: object {} links"
             + " to {}, and this deployment is {}. Two eXo deployments are writing meeting copies into this CalDAV"
             + " account, and each believes it owns the copies it verifies and repairs. One of the two should be"
@@ -1051,14 +1102,45 @@ public class CaldavInboundService {
   }
 
   /**
+   * Puts a foreign deployment on its server's row, so the administration
+   * drawer can state what until EXO-89824 existed only as the line above.
+   *
+   * <p>
+   * <b>Never allowed to fail the import.</b> A row that could not be written
+   * costs an administrator a line in a drawer; an exception here would cost a
+   * user their calendar entry. The stamp is taken only on success, so a write
+   * that failed is retried on the next object rather than suppressed for an
+   * hour.
+   *
+   * @param seen the account and the deployment seen on it, as the throttle
+   *          keys them
+   * @param serverId technical identifier of the registration
+   * @param writer the deployment the copy names
+   */
+  private void recordForeignWriter(String seen, long serverId, String writer) {
+    try {
+      caldavServerService.recordForeignWriter(serverId, writer);
+      foreignDeploymentsRecorded.put(seen, System.nanoTime());
+    } catch (RuntimeException e) {
+      LOG.debug("The deployment {} seen writing into server {} could not be recorded on its row; it is recorded on a later object",
+                writer,
+                serverId,
+                e);
+    }
+  }
+
+  /**
    * The deployment a copy names, or null when the object is not a copy eXo
    * wrote.
    *
    * <p>
    * The {@code URL} property first, then the description: both carry the same
-   * address, but a copy written by an older add-on carries only the
-   * description's line, and a server that drops a property it does not know
-   * still keeps the text. The label in front of the link is localised, so the
+   * address, and the second is read because a server that drops a property it
+   * does not know still keeps the text. Not because an older add-on wrote one
+   * and not the other — it did not. Both carriers landed in the same commit
+   * (EXO-89751, 2026-08-27), which is also the floor of what this can see at
+   * all: a deployment running anything older writes copies with neither, and
+   * is invisible here. The label in front of the link is localised, so the
    * address is matched by its shape rather than by the words around it — which
    * is also what keeps a server's bracketed repetition of the link (BlueMind
    * linkifies every URI in a description) from changing the answer.

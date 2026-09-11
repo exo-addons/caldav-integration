@@ -175,6 +175,10 @@ public class CaldavInboundServiceTest {
   @Mock
   private CaldavAnswerAdoptionService caldavAnswerAdoptionService;
 
+  /** Where a foreign deployment is recorded for the drawer (EXO-89824). */
+  @Mock
+  private CaldavServerService    caldavServerService;
+
   @Spy
   private IcsParser              icsParser;
 
@@ -1632,6 +1636,13 @@ public class CaldavInboundServiceTest {
   private static final String FOREIGN_WARNING  = "written by another eXo deployment";
 
   /**
+   * Where the portal keeps this deployment's own address — what
+   * {@code CommonsUtils.getCurrentDomain} reads, and an eXo deployment sets
+   * from {@code exo.base.url}.
+   */
+  private static final String DOMAIN_PROPERTY  = "gatein.email.domain.url";
+
+  /**
    * A copy naming this deployment is this deployment's, and nothing is said.
    */
   @Test
@@ -1683,6 +1694,90 @@ public class CaldavInboundServiceTest {
     // Detection changes nothing: the copy was imported both times, exactly as
     // an unrecognised one would have been.
     verify(agendaEventService, times(2)).createEvent(any(), any(), any(), any(), any(), any(), anyBoolean(), anyLong());
+  }
+
+  /**
+   * A second deployment writing into the same account is reported too — the
+   * latch is on the pair, not on the account.
+   *
+   * <p>
+   * Keyed on the account alone, the first authority ever seen consumed the
+   * whole detection budget: a copy this deployment wrote under a former base
+   * URL, or one ICS imported by hand from another eXo, latched the account and
+   * the genuine second writer was never named. Three deployments on one
+   * account — production, acceptance, a rig — is the environment EXO-89824
+   * came from, so the case is pinned rather than reasoned about.
+   */
+  @Test
+  public void eachDeploymentWritingIntoTheAccountIsSaidOnce() throws Exception {
+    givenThisDeploymentIs(THIS_DEPLOYMENT);
+    givenTheRecordIsRefreshedAtMostEvery(3600);
+    givenServerObjects(object("o1.ics", "etag-1", copy("uid-1@example.test", "one", FOREIGN_LINK)),
+                       object("o2.ics",
+                              "etag-2",
+                              copy("uid-2@example.test", "two", "https://rig.example.test:8080/portal/dw/agenda?eventId=7")),
+                       object("o3.ics", "etag-3", copy("uid-3@example.test", "three", FOREIGN_LINK)));
+    givenAgendaCreates(501L);
+
+    List<ILoggingEvent> said;
+    try (LogRecorder log = new LogRecorder(CaldavInboundService.class)) {
+      service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+      service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+      said = foreignDeploymentWarnings(log);
+    }
+
+    assertEquals(2, said.size(), "one line per deployment, and the third object repeats the first");
+    String both = said.get(0).getFormattedMessage() + said.get(1).getFormattedMessage();
+    assertTrue(both.contains("acceptance.example.test"), both);
+    assertTrue(both.contains("rig.example.test:8080"), both);
+    // Both reach the row the drawer reads, and neither reaches it twice.
+    verify(caldavServerService).recordForeignWriter(anyLong(), eq("acceptance.example.test"));
+    verify(caldavServerService).recordForeignWriter(anyLong(), eq("rig.example.test:8080"));
+  }
+
+  /**
+   * This deployment reads its own address from the portal's configured domain,
+   * and a copy of its own is then not a foreign one.
+   *
+   * <p>
+   * The other tests state the address directly, which leaves the resolution
+   * path — the one that decides whether the feature works at all in a real
+   * deployment — unexecuted. Its failure mode is silent-off: the catch returns
+   * null, the detection declines to guess, and nothing above DEBUG says so, so
+   * a green suite would prove nothing about it. Exercised here through the
+   * property {@code CommonsUtils.getCurrentDomain} reads, which is a plain
+   * system property and needs no container.
+   */
+  @Test
+  public void thisDeploymentReadsItsOwnAddressFromTheConfiguredDomain() throws Exception {
+    String configured = System.getProperty(DOMAIN_PROPERTY);
+    try {
+      System.setProperty(DOMAIN_PROPERTY, "https://EXO.example.test/");
+      givenTheRecordIsRefreshedAtMostEvery(3600);
+      // Deliberately NOT given: the resolution under test is the one that fills
+      // it, and a stated value would return on the cached branch instead.
+      givenServerObjects(object("o1.ics",
+                                "etag-1",
+                                copy("uid-1@example.test", "ours", "https://exo.example.test/portal/dw/agenda?eventId=9")),
+                         object("o2.ics", "etag-2", copy("uid-2@example.test", "theirs", FOREIGN_LINK)));
+      givenAgendaCreates(501L);
+
+      List<ILoggingEvent> said;
+      try (LogRecorder log = new LogRecorder(CaldavInboundService.class)) {
+        service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+        said = foreignDeploymentWarnings(log);
+      }
+
+      assertEquals(1, said.size(), "this deployment's own copy is not another deployment's");
+      assertTrue(said.get(0).getFormattedMessage().contains("acceptance.example.test"), said.get(0).getFormattedMessage());
+      verify(caldavServerService, never()).recordForeignWriter(anyLong(), eq("exo.example.test"));
+    } finally {
+      if (configured == null) {
+        System.clearProperty(DOMAIN_PROPERTY);
+      } else {
+        System.setProperty(DOMAIN_PROPERTY, configured);
+      }
+    }
   }
 
   /**
@@ -1753,6 +1848,22 @@ public class CaldavInboundServiceTest {
    */
   private void givenThisDeploymentIs(String authority) {
     ReflectionTestUtils.setField(service, "ownDeployment", authority);
+  }
+
+  /**
+   * States how long one account may go without refreshing its server's record
+   * of a deployment.
+   *
+   * <p>
+   * Stated because {@code @Value} is Spring's, and these tests build the
+   * service with Mockito alone — the field is 0 here unless a test says
+   * otherwise, which would make the throttle a no-op and let a test pass that
+   * a deployment would not.
+   *
+   * @param seconds the window
+   */
+  private void givenTheRecordIsRefreshedAtMostEvery(long seconds) {
+    ReflectionTestUtils.setField(service, "foreignWriterRecordSeconds", seconds);
   }
 
   /**
