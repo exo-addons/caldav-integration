@@ -679,10 +679,19 @@ public class CaldavServerServiceTest {
       }
     }
 
+    // The destination the preset chooses, chosen by the seed too: BlueMind's
+    // dedicated calendar is excluded from the account's free/busy and carries
+    // no answer buttons, so a row seeded onto it disagrees with the preset an
+    // administrator is about to apply to that very row.
+    assertEquals(MirrorTargetKind.MAIN_CALENDAR, bluemind.getValue().getMirrorTarget());
+
     ArgumentCaptor<CaldavServer> stalwart = ArgumentCaptor.forClass(CaldavServer.class);
     verify(caldavServerStorage).createSeedServer(stalwart.capture(), eq(CaldavServerService.CALDAV_PROVIDER_NAME));
     assertNull(stalwart.getValue().getIgnoredProperties());
     assertNull(stalwart.getValue().getDroppedProperties());
+    // And only BlueMind moves: Stalwart's dedicated calendar has no such cost,
+    // and the caution on the option stands everywhere it is not answered.
+    assertEquals(MirrorTargetKind.DEDICATED_CALENDAR, stalwart.getValue().getMirrorTarget());
   }
 
   /**

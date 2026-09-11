@@ -266,11 +266,22 @@ public class CaldavServerService {
    * <li><b>Bluemind</b>, a normally-named row whose agenda remote provider is
    * upserted here, since no kernel plugin declares it — and which arrives
    * excused for what BlueMind is known to do to a copy, see
-   * {@link #BLUEMIND_SEED_QUIRKS}. Its excusal lists are the only thing the
-   * seed takes from the browser preset: the preset's choice of the main
-   * calendar and of answer links are copy settings, decisions about where
-   * copies land and what they carry, and the seed leaves those at the model's
-   * defaults for the administrator who edits the row to make.</li>
+   * {@link #BLUEMIND_SEED_QUIRKS}, and pointed at the account's <b>main</b>
+   * calendar, which is where the browser preset points it too.
+   * <p>
+   * The destination is seeded rather than left at the model's default because
+   * on THIS server the default has an established cost: BlueMind's dedicated
+   * calendar is excluded from the account's free/busy — colleagues booking
+   * around the user see eXo meeting times as free — and it carries no answer
+   * buttons. The general caution on the option ("only once copies synchronise
+   * cleanly") is right and stays where it is; it simply does not weigh what is
+   * already known about this one server, which is the same judgement
+   * {@code serverPresets.js} makes for the drawer. A seed that disagreed with
+   * the preset an administrator is about to apply to the very same row would
+   * be teaching two answers to one question.
+   * <p>
+   * {@code answerLinksInCopy} is left at the model's default, which happens to
+   * equal the preset's value, so nothing is stated twice.</li>
    * </ul>
    *
    * <p>
@@ -348,7 +359,7 @@ public class CaldavServerService {
                                                                               seedExcusals(ServerQuirkDirection.ADDED),
                                                                               seedExcusals(ServerQuirkDirection.DROPPED),
                                                                               null, null, null,
-                                                                              MirrorTargetKind.DEDICATED_CALENDAR, null, null),
+                                                                              MirrorTargetKind.MAIN_CALENDAR, null, null),
                                                              CALDAV_PROVIDER_NAME);
     saveAgendaRemoteProvider(bluemind);
     LOG.info("Seeded the Bluemind CalDAV server ({}), active: {}", DEFAULT_BLUEMIND_URL, bluemindActive);
