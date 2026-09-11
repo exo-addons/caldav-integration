@@ -486,7 +486,9 @@ export default {
       // a render that throws does not fail loudly, it silently keeps whatever
       // the section drew last — which here is the empty state, so a drawer
       // would go on saying "nothing seen" while holding a finding.
-      return new Date(writer.lastSeen).toLocaleDateString(this.$i18n && this.$i18n.locale || undefined);
+      const when = new Date(writer.lastSeen);
+      const locale = this.$i18n && this.$i18n.locale;
+      return locale && when.toLocaleDateString(locale) || when.toLocaleDateString();
     },
     /**
      * Folds the drawer's ticks back into the lists the registration is saved
