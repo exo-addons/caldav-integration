@@ -1632,16 +1632,17 @@ public class CaldavEventPropagationServiceTest {
   // ------------------------------------ the abandonment line, EXO-90190
 
   /**
-   * An obligation abandoned on a known state is not reported as a server
-   * refusing writes it never received.
+   * A foreign copy is given up on the first time, not after five identical
+   * refusals, and the line an operator gets names the account setup rather
+   * than a calendar server that was never asked for anything.
    */
   @Test
-  public void anObligationAbandonedOnAKnownStateIsNotReportedAsAServerRefusal() {
+  public void aForeignCopyIsAbandonedOnTheFirstRefusalAndNotReportedAsAServerRefusal() {
     // FOREIGN_COPY is refused before any PUT: the object is another user's
-    // copy, and no retry changes whose it is. It burns the attempt budget like
-    // any refusal — five, then abandoned — and the one line an operator gets
-    // has to say so, or it sends them to a calendar server that was never
-    // asked for anything.
+    // copy, and no waiting changes whose it is. So it does not burn the budget
+    // a bad-day server gets — it is abandoned at once (EXO-90190, product
+    // decision), and the one line an operator gets has to send them to the eXo
+    // account setup, not to a calendar server.
     givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/mirror/uid-8801.ics"));
     givenPair(100L, ALICE);
     when(caldavPushService.pushAgendaEvent(ALICE, login(ALICE), EVENT))
@@ -1651,22 +1652,36 @@ public class CaldavEventPropagationServiceTest {
     List<ILoggingEvent> abandoned;
     try (LogRecorder log = new LogRecorder(CaldavEventPropagationService.class)) {
       service.propagateUpdate(EVENT, A_REAL_EDIT);
+      service.retryOwedPushes(ALICE);
+
+      assertEquals(0,
+                   caldavPendingPushStorage.owedAndStillTrying(ALICE, MAX_ATTEMPTS),
+                   "given up on after one refusal, not after " + MAX_ATTEMPTS);
+
+      // The sweeps that would have followed ask nothing more: the obligation
+      // has left the attemptable set, so no further push is attempted and no
+      // second line is said.
       for (int sweep = 0; sweep < MAX_ATTEMPTS + 2; sweep++) {
         service.retryOwedPushes(ALICE);
       }
       abandoned = log.events()
                      .stream()
                      .filter(recorded -> recorded.getLevel() == Level.WARN
-                         && recorded.getFormattedMessage().contains("stops trying to settle it"))
+                         && recorded.getFormattedMessage().contains("belongs to another eXo user"))
                      .toList();
     }
 
-    assertEquals(1, abandoned.size(), "said once, on the attempt that reaches the bound");
+    // Two, and no more: the attempt propagateUpdate makes at once, and the one
+    // retry that gives up. The MAX_ATTEMPTS + 2 sweeps that followed added
+    // none, which is the whole point of abandoning on the first refusal.
+    verify(caldavPushService, times(2)).pushAgendaEvent(ALICE, login(ALICE), EVENT);
+    assertEquals(1, abandoned.size(), "said once, on the refusal that gives up");
     String line = abandoned.get(0).getFormattedMessage();
-    assertTrue(line.contains(CaldavPushService.FOREIGN_COPY), line);
-    assertTrue(line.contains("declined to send"), line);
-    assertFalse(line.contains("refused"), "nothing was sent to a calendar server, so none refused it: " + line);
-    assertEquals(0, caldavPendingPushStorage.owedAndStillTrying(ALICE, MAX_ATTEMPTS), "abandoned like any refusal");
+    assertTrue(line.contains("stops now"), line);
+    assertTrue(line.contains("nothing was sent to the calendar server"), line);
+    assertFalse(line.contains("refused the write"), "no server refused anything: " + line);
+    assertTrue(line.contains("share one calendar account"), "the line has to name what a human repairs: " + line);
+    assertEquals(1, caldavPendingPushStorage.owed(ALICE), "the record stays: it is where the wrong copy is visible");
   }
 
   /**
@@ -2542,6 +2557,19 @@ public class CaldavEventPropagationServiceTest {
       byObject.replaceAll((objectSyncId, pending) -> {
         if (pending.getId() != null && pending.getId() == id) {
           pending.setAttempts(pending.getAttempts() + 1);
+        }
+        return pending;
+      });
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void abandoned(long id, int maxAttempts) {
+      byObject.replaceAll((objectSyncId, pending) -> {
+        if (pending.getId() != null && pending.getId() == id) {
+          pending.setAttempts(maxAttempts);
         }
         return pending;
       });

@@ -1480,6 +1480,10 @@ public class CaldavEventPropagationService {
    *          named a reason
    */
   private void refuse(long userIdentityId, PendingPush pending, String code) {
+    if (CaldavPushService.FOREIGN_COPY.equals(code)) {
+      abandonOnForeignCopy(userIdentityId, pending);
+      return;
+    }
     try {
       caldavPendingPushStorage.refused(pending.getId());
     } catch (Exception | LinkageError e) {
@@ -1516,5 +1520,46 @@ public class CaldavEventPropagationService {
                pending.getObjectSyncId(),
                maxPushAttempts);
     }
+  }
+  /**
+   * Gives up on an obligation the first time it is refused as another user's
+   * copy, rather than counting it toward the bound.
+   *
+   * <p>
+   * The bound exists for a calendar server having a bad day: five attempts
+   * over twenty-five minutes, then eXo stops arguing. A foreign copy is a
+   * different thing entirely. Nothing was sent, no server refused anything,
+   * and no amount of waiting changes it — the account is shared, or a binding
+   * was left behind, and until somebody repairs that the answer is the same
+   * on every sweep. Four further identical refusals buy nothing and, worse,
+   * spend twenty-five minutes looking to an operator as though eXo were still
+   * working on it.
+   *
+   * <p>
+   * The record is left in place, like any abandoned obligation: it is the only
+   * place the wrongness of that copy is visible, and the write is made the
+   * moment a later edit of the meeting renews it — by which time the account
+   * may well have been repaired.
+   *
+   * @param userIdentityId whose calendar the copy sits in, for the log
+   * @param pending the obligation given up on
+   */
+  private void abandonOnForeignCopy(long userIdentityId, PendingPush pending) {
+    try {
+      caldavPendingPushStorage.abandoned(pending.getId(), maxPushAttempts);
+    } catch (Exception | LinkageError e) {
+      LOG.warn("What eXo owes the copy of user {} could not be given up on; it will be attempted again",
+               pending.getObjectSyncId(),
+               e);
+      return;
+    }
+    // Once, at WARN, and phrased as an instruction rather than a failure: this
+    // is a state of the eXo account setup that a human repairs, and the line
+    // is the only notice they get of it.
+    LOG.warn("The copy of user {} at mapping {} belongs to another eXo user, so eXo will not write to it and stops now"
+        + " rather than repeating the refusal — nothing was sent to the calendar server. Two eXo users share one calendar"
+        + " account, or a binding was left behind; repair that, and an edit of the meeting settles the copy",
+             userIdentityId,
+             pending.getObjectSyncId());
   }
 }
