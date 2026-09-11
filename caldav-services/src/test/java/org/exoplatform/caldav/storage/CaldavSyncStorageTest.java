@@ -316,33 +316,92 @@ public class CaldavSyncStorageTest {
   }
 
   /**
-   * Ownership asked across every pair, not inside one.
+   * Ownership asked for the deployment: every user's mirrors, not one's own.
    */
   @Test
-  public void aUidOneOfTheUsersMirrorsHoldsIsRecognisedAsTheirOwnCopy() {
-    // The question no pair-scoped lookup can answer: a copy eXo wrote carries
-    // its mapping on the pair it was WRITTEN into, and the pair asking is a
-    // different one. Scoped to the user and the server, because a UID on one
-    // account says nothing about an object on another.
-    when(objectSyncDAO.countByOwnerAndOriginAndIcsUid(USER, 2L, SyncOrigin.MIRROR, "uid-1")).thenReturn(1L);
+  public void aUidAnyMirrorOnTheServerHoldsIsRecognisedAsEXosOwnCopy() {
+    // EXO-90190. The question no pair-scoped lookup can answer — a copy eXo
+    // wrote carries its mapping on the pair it was WRITTEN into — and no
+    // user-scoped one either: on an account two eXo users share, the copy was
+    // written by the other user, and it is still eXo's. Scoped to the server
+    // alone, because a UID on one account says nothing about an object on
+    // another. What a mock can pin is the shape of the question: the DAO
+    // method takes no user, so the storage has none to narrow it back with.
+    when(objectSyncDAO.countByServerAndOriginAndIcsUid(2L, SyncOrigin.MIRROR, "uid-1")).thenReturn(1L);
 
-    assertTrue(storage.isMirrorOwned(USER, 2L, "uid-1"));
+    assertTrue(storage.isMirrorOwned(2L, "uid-1"));
   }
 
   @Test
-  public void aUidNoMirrorHoldsIsNotTheUsersOwnCopy() {
-    when(objectSyncDAO.countByOwnerAndOriginAndIcsUid(USER, 2L, SyncOrigin.MIRROR, "uid-2")).thenReturn(0L);
+  public void aUidNoMirrorOnTheServerHoldsIsNotEXosCopy() {
+    when(objectSyncDAO.countByServerAndOriginAndIcsUid(2L, SyncOrigin.MIRROR, "uid-2")).thenReturn(0L);
 
-    assertFalse(storage.isMirrorOwned(USER, 2L, "uid-2"));
+    assertFalse(storage.isMirrorOwned(2L, "uid-2"));
   }
 
   @Test
   public void anObjectWithNoUidIsNobodysCopyAndIsNotAskedAbout() {
     // A blank UID matches every blank UID, so asking would be a way to call an
     // unrelated object ours and refuse to import it.
-    assertFalse(storage.isMirrorOwned(USER, 2L, " "));
+    assertFalse(storage.isMirrorOwned(2L, " "));
 
-    verify(objectSyncDAO, never()).countByOwnerAndOriginAndIcsUid(anyLong(), anyLong(), any(), anyString());
+    verify(objectSyncDAO, never()).countByServerAndOriginAndIcsUid(anyLong(), any(), anyString());
+  }
+
+  /**
+   * The outbound lock: a UID another user's mirror maps is not this user's to
+   * write over.
+   */
+  @Test
+  public void aUidAnotherUsersMirrorMapsIsRecognisedAsTheirs() {
+    when(objectSyncDAO.countByOtherOwnerAndOriginAndIcsUid(USER, 2L, SyncOrigin.MIRROR, "uid-1")).thenReturn(1L);
+
+    assertTrue(storage.isMirrorOwnedByAnotherUser(USER, 2L, "uid-1"));
+  }
+
+  @Test
+  public void aUidOnlyOnesOwnMirrorMapsIsNotAnotherUsers() {
+    // The user's own mirror is excluded from the question at the DAO, and the
+    // storage asks it with this user as the one to exclude.
+    when(objectSyncDAO.countByOtherOwnerAndOriginAndIcsUid(USER, 2L, SyncOrigin.MIRROR, "uid-1")).thenReturn(0L);
+
+    assertFalse(storage.isMirrorOwnedByAnotherUser(USER, 2L, "uid-1"));
+  }
+
+  @Test
+  public void anObjectWithNoUidIsNotAskedAboutForTheOutboundLockEither() {
+    assertFalse(storage.isMirrorOwnedByAnotherUser(USER, 2L, ""));
+
+    verify(objectSyncDAO, never()).countByOtherOwnerAndOriginAndIcsUid(anyLong(), anyLong(), any(), anyString());
+  }
+
+  /**
+   * The shared-account question is asked with a canonical, escaped prefix.
+   */
+  @Test
+  public void theCalendarHomeIsAskedAsACanonicalEscapedPrefix() {
+    // The home arrives as the server spelled it — a full URL, a trailing slash
+    // — while the rows hold canonical paths; and it may carry the pattern's
+    // own wildcards, an underscore above all, which unescaped matches any
+    // character and would call an unrelated account this one. The escape
+    // character itself is escaped too, or a "!" in a path would swallow the
+    // character after it.
+    when(calendarSyncDAO.findOtherUsersUnderHref(eq(USER), eq(SERVER), eq(CalendarSyncStatus.ACTIVE), anyString()))
+                                                                                                                  .thenReturn(List.of(6L));
+
+    assertEquals(List.of(6L),
+                 storage.getOtherUsersUnderCalendarHome(USER, SERVER, "https://dav.example/dav/cal/a_b!d/"));
+
+    ArgumentCaptor<String> prefix = ArgumentCaptor.forClass(String.class);
+    verify(calendarSyncDAO).findOtherUsersUnderHref(eq(USER), eq(SERVER), eq(CalendarSyncStatus.ACTIVE), prefix.capture());
+    assertEquals("/dav/cal/a!_b!!d/%", prefix.getValue());
+  }
+
+  @Test
+  public void aBlankCalendarHomeAsksNobody() {
+    assertTrue(storage.getOtherUsersUnderCalendarHome(USER, SERVER, " ").isEmpty());
+
+    verify(calendarSyncDAO, never()).findOtherUsersUnderHref(anyLong(), anyLong(), any(), anyString());
   }
 
   /**

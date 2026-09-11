@@ -139,4 +139,33 @@ public interface CaldavCalendarSyncDAO extends JpaRepository<CaldavCalendarSyncE
    */
   Page<CaldavCalendarSyncEntity> findByServerId(long serverId, Pageable pageable);
 
+  /**
+   * The other users whose active pairs on one server point under one path.
+   *
+   * <p>
+   * The question behind the shared-account warning (EXO-90190): every pair a
+   * connected account holds lives under that account's calendar home, so
+   * another user's pair under the same home means the same account is
+   * connected twice. Asked once per account per process, which is what lets it
+   * scan the href column — the one column this schema cannot index on MySQL —
+   * without it costing anything on a sweep.
+   *
+   * <p>
+   * The pattern is the caller's, wildcards already escaped with {@code !}; the
+   * repository only says which character escapes.
+   *
+   * @param userIdentityId the user asking, whose own pairs do not count
+   * @param serverId the declared server registration
+   * @param status the state a pair has to be in to count, active in practice
+   * @param prefix a LIKE pattern for the calendar home, ending in {@code %}
+   * @return the other users' identities, empty when the account is theirs alone
+   */
+  @Query("SELECT DISTINCT p.userIdentityId FROM CaldavCalendarSyncEntity p"
+      + " WHERE p.serverId = :serverId AND p.status = :status AND p.userIdentityId <> :userIdentityId"
+      + " AND p.remoteHref LIKE :prefix ESCAPE '!'")
+  List<Long> findOtherUsersUnderHref(@Param("userIdentityId") long userIdentityId,
+                                     @Param("serverId") long serverId,
+                                     @Param("status") CalendarSyncStatus status,
+                                     @Param("prefix") String prefix);
+
 }

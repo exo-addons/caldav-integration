@@ -43,6 +43,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -1636,6 +1637,116 @@ public class CaldavPushServiceTest {
     // collection the user never asked for, to hold an event that is not a
     // space meeting.
     verify(calDavClient, never()).mkCalendar(any(), anyString(), anyString(), any());
+  }
+
+  // ---------------------------------------------------------------------
+  // EXO-90190 — two eXo users on one account
+  // ---------------------------------------------------------------------
+
+  /**
+   * A personal event whose UID another user's mirror maps is not written.
+   */
+  @Test
+  public void aPersonalEventWhoseUidAnotherUsersMirrorMapsIsRefusedBeforeAnythingIsWritten() throws Exception {
+    // The second lock. The href is derived from the collection and the UID,
+    // so on an account two users share, a personal-calendar write of a UID the
+    // other user's mirror maps lands on THEIR copy and replaces it in place —
+    // once per sweep, for ever, each pair moving the other's ETag. The event
+    // being pushed here is one imported from that copy before the ownership
+    // question was widened; pushing it back is the overwrite.
+    givenAnAgendaEvent(110L, 0L);
+    givenPersonalCalendar(7L, "cal-anchor");
+    when(caldavSyncStorage.getPairByLocalCalendar(USER, SERVER, "cal-anchor")).thenReturn(boundPersonalPair());
+    when(agendaRemoteEventService.findRemoteEvent(110L, USER)).thenReturn(null);
+    when(agendaEventIcsMapper.toIcsEvent(any(), anyString(), anyLong())).thenReturn(event("uid-110"));
+    when(caldavSyncStorage.isMirrorOwnedByAnotherUser(USER, SERVER, "uid-110")).thenReturn(true);
+    // Stubbed leniently so that removing the guard fails this test on the
+    // write it then performs, not on a stub it happens to be missing.
+    lenient().when(calDavClient.putObject(any(), anyString(), anyString()))
+             .thenReturn(new PutResult(201, "\"e\"", null));
+    lenient().when(caldavSyncStorage.saveObject(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    CaldavPushException refusal = assertThrows(CaldavPushException.class,
+                                               () -> service.pushAgendaEvent(USER, "john", 110L));
+
+    assertEquals(CaldavPushService.FOREIGN_COPY, refusal.getCode());
+    // A state, not a failure: the copy stays the other user's for as long as
+    // the meeting does, so the propagation records it without a trace.
+    assertTrue(CaldavPushService.isKnownState(refusal.getCode()));
+    verify(calDavClient, never()).putObject(any(), anyString(), anyString());
+    verify(calDavClient, never()).updateObject(any(), anyString(), anyString(), anyString());
+    verify(calDavClient, never()).overwriteObject(any(), anyString(), anyString());
+    verify(caldavSyncStorage, never()).saveObject(any());
+  }
+
+  /**
+   * The mirror is exempt: a UID it maps is this user's own copy.
+   */
+  @Test
+  public void aMirrorWriteIsNotAskedWhetherAnotherUserOwnsTheUid() {
+    givenAMirror();
+    when(calDavClient.putObject(any(), anyString(), anyString()))
+                                                                                          .thenReturn(new PutResult(201,
+                                                                                                                    "\"etag-1\"",
+                                                                                                                    null));
+    when(caldavSyncStorage.saveObject(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    service.pushEvent(USER, "john", event("evt-1"), null, false);
+
+    verify(caldavSyncStorage, never()).isMirrorOwnedByAnotherUser(anyLong(), anyLong(), anyString());
+    verify(calDavClient).putObject(any(), anyString(), anyString());
+  }
+
+  /**
+   * A mapping row inserted by a concurrent push is converged on, not failed on.
+   */
+  @Test
+  public void aMappingInsertedMeanwhileIsConvergedOnRatherThanFailed() {
+    // Measured on acceptance: the listener carrying an edit and the sweep
+    // retrying what is owed, 20 ms apart, each reading "no row", each
+    // writing, each inserting — and the unique index on (pair, UID) refusing
+    // the second, 137 times a night, as a warning with a trace that left the
+    // obligation owed although the object was on the server. The row that
+    // won is read back and this write's href and ETag are recorded on it.
+    givenAMirror();
+    when(calDavClient.putObject(any(), anyString(), anyString()))
+                                                                                          .thenReturn(new PutResult(201,
+                                                                                                                    "\"etag-1\"",
+                                                                                                                    null));
+    ObjectSync inserted = mapped("\"etag-0\"");
+    inserted.setId(77L);
+    // No row before the write; the concurrent push's row afterwards.
+    when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null, inserted);
+    when(caldavSyncStorage.saveObject(any())).thenThrow(new DataIntegrityViolationException("Duplicate entry '1-evt-1' for key 'UQ_CALDAV_OBJECT_SYNC_UID'"))
+                                             .thenAnswer(invocation -> invocation.getArgument(0));
+
+    ObjectSync mapping = service.pushEvent(USER, "john", event("evt-1"), 52L, false);
+
+    assertEquals(77L, mapping.getId(), "the row that won, not a third attempt at inserting");
+    assertEquals("\"etag-1\"", mapping.getEtag(), "carrying what this write knows");
+    assertEquals(52L, mapping.getLocalEventId());
+    verify(caldavSyncStorage, times(2)).saveObject(any());
+  }
+
+  /**
+   * A duplicate-key refusal with no row behind it is the failure it looks like.
+   */
+  @Test
+  public void aDuplicateKeyWithNoRowBehindItIsNotSwallowed() {
+    // Only the race is converged on. A refusal that leaves no row to read is
+    // something else — and swallowing it would turn the index into a
+    // silencer, exactly the reflex the hardening must not have.
+    givenAMirror();
+    when(calDavClient.putObject(any(), anyString(), anyString()))
+                                                                                          .thenReturn(new PutResult(201,
+                                                                                                                    "\"etag-1\"",
+                                                                                                                    null));
+    when(caldavSyncStorage.getObjectByUid(1L, "evt-1")).thenReturn(null);
+    when(caldavSyncStorage.saveObject(any())).thenThrow(new DataIntegrityViolationException("something else entirely"));
+
+    assertThrows(DataIntegrityViolationException.class, () -> service.pushEvent(USER, "john", event("evt-1"), null, false));
+
+    verify(caldavSyncStorage, times(1)).saveObject(any());
   }
 
   @Test

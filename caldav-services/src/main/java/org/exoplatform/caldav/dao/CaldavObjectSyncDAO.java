@@ -144,8 +144,8 @@ public interface CaldavObjectSyncDAO extends JpaRepository<CaldavObjectSyncEntit
                                            @Param("localEventIds") Collection<Long> localEventIds);
 
   /**
-   * How many of this user's pairs of one origin, on one server, already map
-   * this iCalendar UID.
+   * How many pairs of one origin on one server — whoever holds them — already
+   * map this iCalendar UID.
    *
    * <p>
    * The ownership question the inbound half asks before importing an object:
@@ -157,24 +157,61 @@ public interface CaldavObjectSyncDAO extends JpaRepository<CaldavObjectSyncEntit
    * event.
    *
    * <p>
-   * A count rather than the rows: the caller only ever asks whether the object
-   * is ours, and the row it would be handed belongs to another pair, so
+   * <b>Deliberately not scoped to a user, and that is the whole of
+   * EXO-90190.</b> This question was first widened from the pair to the user,
+   * one level short of what it has to answer: a CalDAV account can be shared
+   * by several eXo users, and a copy one of them wrote into it is still a copy
+   * eXo wrote. Asked by the second user about the first one's copy, the
+   * user-scoped count answered zero, the copy was imported as a genuine remote
+   * event, pushed back as a fresh copy, imported by the first user in turn —
+   * and round it went every sweep, filling both users' calendars and the
+   * agenda table with duplicates of one meeting. Ownership is a fact about the
+   * deployment: a MIRROR pair is an eXo copy by construction, whoever owns it.
+   *
+   * <p>
+   * The server scope stays — a UID on one account says nothing about an object
+   * on another. A count rather than the rows, for the reason every read here
+   * shares: the caller only ever asks whether the object is ours, and the row
+   * it would be handed belongs to another pair — of another user, now — so
    * returning it would invite writing to a mapping this pair does not own.
    *
-   * @param userIdentityId the user whose pairs are asked about
-   * @param serverId the declared server registration; a UID on one account
-   *          says nothing about an object on another
+   * @param serverId the declared server registration
    * @param origin which side created the collections that count as owning
    * @param icsUid the iCalendar UID looked for
    * @return how many mappings of that origin carry the UID, zero when none do
    */
   @Query("SELECT COUNT(o) FROM CaldavObjectSyncEntity o, CaldavCalendarSyncEntity p"
-      + " WHERE o.calendarSyncId = p.id AND p.userIdentityId = :userIdentityId"
+      + " WHERE o.calendarSyncId = p.id"
       + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid")
-  long countByOwnerAndOriginAndIcsUid(@Param("userIdentityId") long userIdentityId,
-                                      @Param("serverId") long serverId,
-                                      @Param("origin") SyncOrigin origin,
-                                      @Param("icsUid") String icsUid);
+  long countByServerAndOriginAndIcsUid(@Param("serverId") long serverId,
+                                       @Param("origin") SyncOrigin origin,
+                                       @Param("icsUid") String icsUid);
+
+  /**
+   * How many pairs of one origin on one server, held by a user <em>other</em>
+   * than this one, already map this iCalendar UID.
+   *
+   * <p>
+   * The outbound half's lock (EXO-90190). Two pairs on one collection derive
+   * the same href from a UID, so a personal-calendar write of an object that
+   * another user's mirror maps would overwrite that user's copy in place. The
+   * push asks this before the PUT and refuses. A count and never a row, for
+   * the reason above — and here the row would belong to somebody else's
+   * account, which makes handing it over worse than useless.
+   *
+   * @param userIdentityId the user about to write, whose own pairs do not count
+   * @param serverId the declared server registration
+   * @param origin which side created the collections that count as owning
+   * @param icsUid the iCalendar UID about to be written
+   * @return how many other users' mappings of that origin carry the UID
+   */
+  @Query("SELECT COUNT(o) FROM CaldavObjectSyncEntity o, CaldavCalendarSyncEntity p"
+      + " WHERE o.calendarSyncId = p.id AND p.userIdentityId <> :userIdentityId"
+      + " AND p.serverId = :serverId AND p.origin = :origin AND o.icsUid = :icsUid")
+  long countByOtherOwnerAndOriginAndIcsUid(@Param("userIdentityId") long userIdentityId,
+                                           @Param("serverId") long serverId,
+                                           @Param("origin") SyncOrigin origin,
+                                           @Param("icsUid") String icsUid);
 
   /**
    * Which eXo events this user's pairs of one origin, on one server, hold that
@@ -187,6 +224,18 @@ public interface CaldavObjectSyncDAO extends JpaRepository<CaldavObjectSyncEntit
    * as one of eXo's own, and an answer can only be recorded against the event
    * the copy stands for — which lives on a <em>different</em> pair from the one
    * doing the reading, and so is out of reach of every pair-scoped lookup here.
+   *
+   * <p>
+   * <b>Still scoped to the user, on purpose, while the ownership count is not
+   * (EXO-90190).</b> The two questions look alike and must not be made alike.
+   * This one feeds the adoption of the owner's answer: the PARTSTAT read off
+   * the copy is recorded as the <em>reading</em> user's response to the event
+   * it names. Asked for the deployment, it would name the event behind another
+   * user's copy on a shared account, and the reading user's pass would record
+   * that other user's phone answer as its own. On a foreign copy this answers
+   * nothing, no answer is read, and that is right: the copy's owner reads their
+   * own answer on their own pass. Anyone widening this "for consistency" is
+   * reintroducing exactly that.
    *
    * <p>
    * The event identifiers and nothing else, deliberately, for the reason the

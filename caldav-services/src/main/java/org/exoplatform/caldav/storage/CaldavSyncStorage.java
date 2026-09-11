@@ -240,28 +240,106 @@ public class CaldavSyncStorage {
    * interruption between the two — the PUT went through and the row was never
    * saved — which leaves an unowned copy the next push reconciles.
    *
-   * @param userIdentityId identity of the user whose copies are asked about
+   * <p>
+   * Asked for the whole deployment and not for one user (EXO-90190): a CalDAV
+   * account can be connected by several eXo users, and a copy one of them
+   * wrote into it is still eXo's. There is no user to hand this method, on
+   * purpose — the DAO question has none either, so nothing downstream can
+   * narrow it back.
+   *
    * @param serverId the declared server registration
    * @param icsUid the iCalendar UID being imported
-   * @return true when one of this user's mirror pairs already maps that UID
+   * @return true when a mirror pair of any user on that server already maps
+   *         that UID
    */
-  public boolean isMirrorOwned(long userIdentityId, long serverId, String icsUid) {
+  public boolean isMirrorOwned(long serverId, String icsUid) {
     if (StringUtils.isBlank(icsUid)) {
       return false;
     }
-    return objectSyncDAO.countByOwnerAndOriginAndIcsUid(userIdentityId, serverId, SyncOrigin.MIRROR, icsUid) > 0;
+    return objectSyncDAO.countByServerAndOriginAndIcsUid(serverId, SyncOrigin.MIRROR, icsUid) > 0;
+  }
+
+  /**
+   * Whether this iCalendar object is a copy eXo wrote into the mirror of a
+   * <em>different</em> user on this server.
+   *
+   * <p>
+   * What the outbound half asks before writing a personal-calendar object
+   * (EXO-90190): two users' pairs on one collection compute the same href for
+   * one UID, so the write would land on the other user's copy and replace it.
+   * The user's own mirror is excluded because a UID it maps is that user's
+   * own copy, which a write of theirs may legitimately move or rewrite.
+   *
+   * @param userIdentityId identity of the user about to write
+   * @param serverId the declared server registration
+   * @param icsUid the iCalendar UID about to be written
+   * @return true when another user's mirror pair on that server maps that UID
+   */
+  public boolean isMirrorOwnedByAnotherUser(long userIdentityId, long serverId, String icsUid) {
+    if (StringUtils.isBlank(icsUid)) {
+      return false;
+    }
+    return objectSyncDAO.countByOtherOwnerAndOriginAndIcsUid(userIdentityId, serverId, SyncOrigin.MIRROR, icsUid) > 0;
+  }
+
+  /**
+   * The other users whose active pairs on this server live under one calendar
+   * home — the users who connected the same account.
+   *
+   * <p>
+   * The home is made canonical the way every stored href is, so the prefix
+   * compares against what the rows hold, and the LIKE pattern's own wildcards
+   * are escaped: an account path may carry an underscore, and unescaped it
+   * would match any character.
+   *
+   * @param userIdentityId identity of the user asking, who does not count
+   * @param serverId the declared server registration
+   * @param calendarHome the account's calendar home, in any spelling
+   * @return the other users' identities, empty when nobody else is under it
+   */
+  public List<Long> getOtherUsersUnderCalendarHome(long userIdentityId, long serverId, String calendarHome) {
+    String canonical = canonicalHref(calendarHome);
+    if (StringUtils.isBlank(canonical)) {
+      return List.of();
+    }
+    return calendarSyncDAO.findOtherUsersUnderHref(userIdentityId,
+                                                   serverId,
+                                                   CalendarSyncStatus.ACTIVE,
+                                                   likePrefix(canonical + "/"));
+  }
+
+  /**
+   * A LIKE pattern matching every path under one prefix, with the pattern's
+   * own wildcards escaped by {@code !} — the escape character the DAO query
+   * declares.
+   *
+   * @param prefix the literal path prefix
+   * @return the pattern
+   */
+  static String likePrefix(String prefix) {
+    return prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
   }
 
   /**
    * The eXo event a copy eXo wrote into this user's mirror stands for.
    *
    * <p>
-   * The companion of {@link #isMirrorOwned(long, long, String)} and asked in
-   * the same breath (EXO-89807): the inbound half recognises one of eXo's own
+   * The companion of {@link #isMirrorOwned(long, String)} and asked in the
+   * same breath (EXO-89807): the inbound half recognises one of eXo's own
    * copies and drops it, but the owner's answer is written on that copy and has
    * to be recorded against something. The mapping that knows which event lives
    * on the MIRROR pair, and the pair reading the collection is a different one,
    * so nothing pair-scoped can answer this.
+   *
+   * <p>
+   * <b>Scoped to the user while its companion is not, and the difference is
+   * load-bearing (EXO-90190).</b> An answer read off a copy is recorded as the
+   * reading user's. On an account two users share, the companion says "eXo's"
+   * of the other user's copy too — rightly, so it is not imported — but the
+   * event it names is the other user's to answer for. Asked here for the
+   * deployment, user six would record user one's phone answer as their own.
+   * On a foreign copy this answers null, nothing is recorded, and that is the
+   * behaviour: the copy's owner reads their own answer on their own pass.
    *
    * <p>
    * Two mirror pairs holding the same UID is not a state this connector

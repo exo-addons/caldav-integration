@@ -313,9 +313,10 @@ public class CaldavInboundService {
       // EXO-89807. The object is in hand, its owner's answer is on it, and
       // this is the only reader that was told it changed.
       adoptAnswerOnCopy(userIdentityId, pair, object, master.getUid());
-      // A copy eXo wrote itself. Importing it would show the user a second,
-      // personal event standing for a space meeting they already see.
-      LOG.debug("Object {} is a copy eXo wrote into the mirror and is not imported back", object.href());
+      // A copy eXo wrote itself — into this user's mirror, or into another
+      // user's on an account they share. Importing it would show the user a
+      // second, personal event standing for a meeting eXo already holds.
+      LOG.debug("Object {} is a copy eXo wrote into a mirror and is not imported back", object.href());
       return false;
     }
     ObjectSync known = caldavSyncStorage.getObjectByUid(pair.getId(), master.getUid());
@@ -392,17 +393,20 @@ public class CaldavInboundService {
       }
       Long localEventId = caldavSyncStorage.getMirrorEventId(userIdentityId, pair.getServerId(), icsUid);
       if (localEventId == null || localEventId <= 0) {
-        // The copy is ours by UID but names no event we can record against —
-        // an interrupted push, an event since deleted. Nothing to do, and
-        // nothing wrong.
-        LOG.debug("The copy at {} stands for no event of ours; no answer is read off it", object.href());
+        // The copy is eXo's by UID but names no event in THIS user's mirror:
+        // another user's copy on an account they share (EXO-90190), an
+        // interrupted push, an event since deleted. Nothing to do, and nothing
+        // wrong — whatever answer it carries belongs to whoever wrote it, and
+        // recording it as this user's would be the attribution error the
+        // user-scoped question exists to prevent.
+        LOG.debug("The copy at {} is eXo's but not user {}'s own; no answer is read off it", object.href(), userIdentityId);
         return;
       }
       CaldavAnswerAdoptionService.Outcome outcome = caldavAnswerAdoptionService.adoptAnswer(userIdentityId,
                                                                                            localEventId,
                                                                                            object.calendarData());
       if (outcome == CaldavAnswerAdoptionService.Outcome.ADOPTED) {
-        LOG.debug("An answer of user {} was read off the copy at {} before it was left where it is",
+        LOG.debug("An answer of user {} was read off their own copy at {} before it was left where it is",
                   userIdentityId,
                   object.href());
       }
@@ -435,19 +439,31 @@ public class CaldavInboundService {
    * less because this pair happens to hold a stale row for the same UID.
    *
    * <p>
+   * Asked for the deployment, not for the reading user (EXO-90190). The first
+   * version of this rule asked "did <em>this user's</em> mirror write it?",
+   * which is one level short: on an account two eXo users share, the copy was
+   * written by the other one, the user-scoped question answered no, and the
+   * copy was imported as a genuine remote event — then pushed back under a
+   * fresh UID, imported by the other user in turn, and so on every sweep. A
+   * mirror copy is eXo's whoever wrote it, and the mapping table says so for
+   * every user at once.
+   *
+   * <p>
    * The mirror pair itself is exempt. Reading the mirror back is not importing
    * a foreign object, and answering true there would make the mirror unable to
-   * reconcile the copies it owns.
+   * reconcile the copies it owns. The sweep never reads through a mirror pair
+   * in the first place; the exemption states the intent where the rule lives.
    *
    * @param pair the binding being read
    * @param icsUid the object's iCalendar UID
-   * @return true when a mirror pair of this user already maps that UID
+   * @return true when a mirror pair of any user on the pair's server already
+   *         maps that UID
    */
   private boolean isMirrorOwned(CalendarSync pair, String icsUid) {
     if (pair.getOrigin() == SyncOrigin.MIRROR) {
       return false;
     }
-    return caldavSyncStorage.isMirrorOwned(pair.getUserIdentityId(), pair.getServerId(), icsUid);
+    return caldavSyncStorage.isMirrorOwned(pair.getServerId(), icsUid);
   }
 
   /**

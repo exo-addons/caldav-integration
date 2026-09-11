@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import org.exoplatform.agenda.model.Calendar;
@@ -108,6 +109,20 @@ public class CaldavPushService {
   public static final String     MAIN_CALENDAR_UNKNOWN  = "caldav.error.mainCalendarUnknown";
 
   /**
+   * The object about to be written is another eXo user's copy of a meeting: a
+   * mirror pair of a different user on the same server maps its UID, and the
+   * two pairs derive the same href from it (EXO-90190).
+   *
+   * <p>
+   * A state, not a failure: the copy stays that user's for as long as the
+   * meeting does, and no retry changes whose it is. It arises on an account two
+   * users share, when one of them holds — from before the ownership question
+   * was widened — a personal event imported from the other's copy, and the
+   * push would carry it back onto the very object it came from.
+   */
+  public static final String     FOREIGN_COPY           = "caldav.error.foreignCopy";
+
+  /**
    * The name this add-on registers itself under as an agenda remote provider,
    * in caldav-configuration.xml. It has to match that declaration exactly:
    * agenda resolves the provider by name when it stores the mapping between
@@ -127,7 +142,7 @@ public class CaldavPushService {
    * failure, which is the safe default: a state nobody classified is exactly
    * the thing worth hearing about.
    */
-  private static final Set<String> KNOWN_STATE_CODES = Set.of(NOT_CONNECTED, MAIN_CALENDAR_UNKNOWN);
+  private static final Set<String> KNOWN_STATE_CODES = Set.of(NOT_CONNECTED, MAIN_CALENDAR_UNKNOWN, FOREIGN_COPY);
 
   /**
    * The codes that describe an attempt that failed — a refused save, a
@@ -400,6 +415,23 @@ public class CaldavPushService {
                                boolean overwrite) {
     CaldavUserSetting settings = connectedSettings(userIdentityId);
     CalDavEndpoint endpoint = endpointOf(settings, username);
+    if (pair.getOrigin() != SyncOrigin.MIRROR
+        && caldavSyncStorage.isMirrorOwnedByAnotherUser(userIdentityId, pair.getServerId(), event.getUid())) {
+      // The second lock of EXO-90190, in the spirit of removeWhatWasLeftBehind:
+      // the href below is derived from the collection and the UID, so two
+      // users' pairs on one collection address the SAME object, and a
+      // personal-calendar write of a UID another user's mirror maps would
+      // replace that user's copy in place — once per sweep, for ever, while
+      // the two users' rows keep moving each other's ETag. The inbound guard
+      // stops such an event from being imported; this stops one imported
+      // before the guard existed from being pushed back. Asked before
+      // anything is rendered or looked up, because nothing after it is worth
+      // doing. The mirror is exempt: a UID it maps is this user's own copy.
+      throw new CaldavPushException(FOREIGN_COPY,
+                                    "Object " + event.getUid() + " in " + pair.getRemoteHref()
+                                        + " is another user's copy of a meeting; it is not overwritten with an event of user "
+                                        + userIdentityId);
+    }
 
     String ics = icsWriter.write(event);
     ObjectSync known = caldavSyncStorage.getObjectByUid(pair.getId(), event.getUid());
@@ -429,12 +461,62 @@ public class CaldavPushService {
     mapping.setRemoteHref(href);
     mapping.setEtag(result.etag());
     mapping.setLastSync(new Date());
-    ObjectSync saved = caldavSyncStorage.saveObject(mapping);
+    ObjectSync saved = saveMapping(pair, event.getUid(), mapping);
     // Last, and only once the destination holds the event: a move that failed
     // here would otherwise take the copy away without having written the new
     // one, which loses the user's event rather than tidying it.
     removeWhatWasLeftBehind(userIdentityId, leftBehind, href, endpoint, settings);
     return saved;
+  }
+
+  /**
+   * Persists the mapping row of a write, converging on a row inserted
+   * meanwhile rather than failing on it.
+   *
+   * <p>
+   * Two pushes of one event can overlap — the listener that carries an edit
+   * and the sweep that retries what is owed were measured 20 ms apart on
+   * acceptance (EXO-90190) — and each reads "no row", writes the object, and
+   * inserts. The unique index on (pair, UID) refuses the second insert, which
+   * is the index doing its job: there must be one row. What was wrong is what
+   * happened next — the refusal surfaced as a warning with a trace, 137 times
+   * a night, and the obligation stayed owed as though nothing had been
+   * written, when the object was on the server and the first row described
+   * it. So the refusal is met by reading the row that won and recording this
+   * write's href and ETag on it, which is what the update path would have done
+   * had the read come a moment later.
+   *
+   * <p>
+   * Only when a row actually exists, and only on an insert. A refusal with no
+   * row behind it is not this race, and a refusal of an update is not a
+   * duplicate at all; both are rethrown as the failures they are. This is a
+   * hardening of the site the collisions hit, not a cure for what caused them
+   * to collide.
+   *
+   * @param pair the collection written into
+   * @param icsUid the object's iCalendar UID
+   * @param mapping the row as this write would record it
+   * @return the row as it now stands
+   */
+  private ObjectSync saveMapping(CalendarSync pair, String icsUid, ObjectSync mapping) {
+    try {
+      return caldavSyncStorage.saveObject(mapping);
+    } catch (DataIntegrityViolationException e) {
+      ObjectSync existing = mapping.getId() == null ? caldavSyncStorage.getObjectByUid(pair.getId(), icsUid) : null;
+      if (existing == null) {
+        throw e;
+      }
+      LOG.debug("The mapping of {} in pair {} was inserted by a concurrent push; this write is recorded on that row",
+                icsUid,
+                pair.getId());
+      existing.setRemoteHref(mapping.getRemoteHref());
+      existing.setEtag(mapping.getEtag());
+      existing.setLastSync(mapping.getLastSync());
+      if (mapping.getLocalEventId() != null) {
+        existing.setLocalEventId(mapping.getLocalEventId());
+      }
+      return caldavSyncStorage.saveObject(existing);
+    }
   }
 
   /**
