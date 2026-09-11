@@ -85,6 +85,7 @@ import org.exoplatform.caldav.model.ObjectSync;
 import org.exoplatform.caldav.model.SyncOrigin;
 import org.exoplatform.caldav.storage.CaldavConnectorStorage;
 import org.exoplatform.caldav.storage.CaldavSyncStorage;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 /**
  * Bringing a collection's events into the calendar standing for it.
@@ -169,6 +170,10 @@ public class CaldavInboundServiceTest {
   /** The narrow inbound mapping of the owner's own PARTSTAT (EXO-89681). */
   @Mock
   private CaldavAnswerAdoptionService caldavAnswerAdoptionService;
+
+  /** Told which copy a change came from, so it is not written back to (EXO-90190). */
+  @Mock
+  private CaldavEventPropagationService caldavEventPropagationService;
 
   @Spy
   private IcsParser              icsParser;
@@ -577,6 +582,75 @@ public class CaldavInboundServiceTest {
     assertEquals(501L, saved.getValue().getId());
   }
 
+  /**
+   * The defect the rig reproduced twice (EXO-90190): the update passed
+   * {@code null} as the event's remote identity, which agenda reads as "delete
+   * the mapping". The next push then found no UID, minted one, and wrote a
+   * second object. The identity must survive a remote edit, in the one shape
+   * agenda keeps: a remote id, and a provider named — every other shape is a
+   * deletion.
+   */
+  @Test
+  public void aRemoteEditKeepsTheEventsRemoteIdentity() throws Exception {
+    givenServerObjects(object("o1.ics", "etag-2", icsModifiedAt("uid-1@example.test", "Moved", "20261005T120000Z")));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(eventUpdatedAt("2026-10-05T09:00:00Z"));
+
+    service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+
+    ArgumentCaptor<RemoteEvent> identity = ArgumentCaptor.forClass(RemoteEvent.class);
+    verify(agendaEventService).updateEvent(any(), any(), any(), any(), any(), identity.capture(), eq(false), eq(USER));
+    RemoteEvent recorded = identity.getValue();
+    assertNotNull(recorded, "a null identity is an instruction to delete the mapping");
+    assertEquals("uid-1@example.test", recorded.getRemoteId());
+    assertEquals("agenda.caldavCalendar", recorded.getRemoteProviderName());
+    // Exactly what agenda tests before deciding to delete rather than store.
+    assertFalse(recorded.getRemoteId() == null || recorded.getRemoteId().isBlank()
+        || (recorded.getRemoteProviderId() <= 0
+            && (recorded.getRemoteProviderName() == null || recorded.getRemoteProviderName().isBlank())),
+                "the record must fail every one of agenda's three deletion conditions");
+  }
+
+  /**
+   * The other half of EXO-90190: agenda broadcasts the update the inbound pass
+   * asks for, and the listener carries it to every holder of a copy — the
+   * copy it was just read from included. The change is announced as the
+   * server's own, through the mapping it came through, <em>before</em> agenda
+   * is asked, so the announcement is in place when the broadcast arrives.
+   */
+  @Test
+  public void aRemoteEditIsAnnouncedAsTheServersOwnBeforeAgendaIsAsked() throws Exception {
+    givenServerObjects(object("o1.ics", "etag-2", icsModifiedAt("uid-1@example.test", "Moved", "20261005T120000Z")));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(eventUpdatedAt("2026-10-05T09:00:00Z"));
+
+    service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+
+    InOrder order = inOrder(caldavEventPropagationService, agendaEventService);
+    order.verify(caldavEventPropagationService).changedOnTheServer(501L, 1L);
+    order.verify(agendaEventService).updateEvent(any(), any(), any(), any(), any(), any(), eq(false), eq(USER));
+    verify(caldavEventPropagationService, never()).notChangedAfterAll(anyLong());
+  }
+
+  /**
+   * An update agenda refuses broadcasts nothing, so nothing would consume the
+   * announcement; left in place it would silence the next genuine edit of the
+   * event. It is withdrawn.
+   */
+  @Test
+  public void anAnnouncementIsWithdrawnWhenAgendaRefusesTheUpdate() throws Exception {
+    givenServerObjects(object("o1.ics", "etag-2", icsModifiedAt("uid-1@example.test", "Moved", "20261005T120000Z")));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(eventUpdatedAt("2026-10-05T09:00:00Z"));
+    when(agendaEventService.updateEvent(any(), any(), any(), any(), any(), any(), anyBoolean(), anyLong()))
+                                                                                                          .thenThrow(new IllegalStateException("refused"));
+
+    assertEquals(0, service.importInto(USER, LOGIN, pair(), calendar(), from(), to()));
+
+    verify(caldavEventPropagationService).changedOnTheServer(501L, 1L);
+    verify(caldavEventPropagationService).notChangedAfterAll(501L);
+  }
+
   @Test
   public void aLocalEditMoreRecentThanTheRemoteOneIsNotOverwritten() throws Exception {
     // The edit is not lost — the outbound half carries it. What matters here
@@ -926,6 +1000,31 @@ public class CaldavInboundServiceTest {
     verify(agendaEventService, never()).deleteEventById(eq(501L), anyLong());
     verify(caldavSyncStorage).deleteObject(102L);
     verify(caldavSyncStorage, never()).deleteObject(101L);
+  }
+
+  /**
+   * The same {@code null}-shaped echo on the deletion path (EXO-90190): the
+   * mapping is still recorded when agenda broadcasts the deletion, so the
+   * listener would ask the server to remove an object the server just said
+   * was gone, and owe that removal to a mapping about to be dropped. Announced
+   * before agenda is asked, through the mapping the vanishing was seen on.
+   */
+  @Test
+  public void aDeletionSeenOnTheAccountIsAnnouncedAsTheServersOwnBeforeAgendaIsAsked() throws Exception {
+    when(caldavConnectorStorage.getCaldavSetting(USER)).thenReturn(settings());
+    when(calDavClient.endpoint(SERVER, LOGIN)).thenReturn(endpoint);
+    when(calDavClient.listResourceEtags(any(), eq(HREF)))
+        .thenReturn(Map.of(HREF + "kept.ics", "etag-1"));
+    givenMappings(objectSync(101L, 501L, HREF + "kept.ics"),
+                  objectSync(102L, 502L, HREF + "vanished.ics"));
+
+    service.removeVanishedObjects(USER, LOGIN, pair());
+
+    InOrder order = inOrder(caldavEventPropagationService, agendaEventService);
+    order.verify(caldavEventPropagationService).changedOnTheServer(502L, 102L);
+    order.verify(agendaEventService).deleteEventById(502L, USER);
+    verify(caldavEventPropagationService, never()).changedOnTheServer(eq(501L), anyLong());
+    verify(caldavEventPropagationService, never()).notChangedAfterAll(anyLong());
   }
 
   @Test

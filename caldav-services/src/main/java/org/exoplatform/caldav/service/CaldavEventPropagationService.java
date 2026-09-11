@@ -16,12 +16,16 @@
  */
 package org.exoplatform.caldav.service;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -174,6 +178,22 @@ public class CaldavEventPropagationService {
   private static final int                                     RETRY_BATCH         = 200;
 
   /**
+   * How long a change announced as the server's own stays announced.
+   *
+   * <p>
+   * The announcement is consumed by the first broadcast that meets it, so in
+   * the ordinary case it lives for the few milliseconds between agenda saving
+   * the event and the listener running. The bound is for the case where that
+   * broadcast never arrives — a listener running with no container, or agenda
+   * throwing before it broadcasts — because an announcement that outlived its
+   * broadcast would silence the next genuine edit of the same event, and
+   * silencing a genuine edit is the one thing this must never do. Five minutes
+   * is long enough for any listener queue and short enough that such a leak
+   * costs one redundant rewrite at most, which is the state before EXO-90190.
+   */
+  private static final Duration                                FROM_SERVER_FOR     = Duration.ofMinutes(5);
+
+  /**
    * The modifications a copy cannot show, so no copy is rewritten for them
    * alone.
    *
@@ -255,6 +275,105 @@ public class CaldavEventPropagationService {
    */
   @Value("${exo.agenda.caldav.push.maxAttempts:5}")
   private int                                                  maxPushAttempts;
+
+  /**
+   * The changes the inbound pass is applying from the server right now, by
+   * event, each naming the mapping the change was read through.
+   *
+   * <p>
+   * In memory and node-local on purpose: agenda's listeners fire in the JVM
+   * that saved the event, which is the JVM the inbound pass runs in, so the
+   * announcement and the broadcast that consumes it always meet here. A
+   * {@code ThreadLocal} would not do — every propagation listener is
+   * {@code @Asynchronous}, and the broadcast is handled on another thread.
+   */
+  private final Map<Long, FromServer>                          fromServer          = new ConcurrentHashMap<>();
+
+  /**
+   * Announces that the next change to this event is the server's own, read
+   * through the given mapping, so that copy is not written back to.
+   *
+   * <h4>The write that echoed the server to itself (EXO-90190)</h4>
+   *
+   * <p>
+   * The inbound pass applies a change it read from a collection by asking
+   * agenda to update the event, and agenda broadcasts that update like any
+   * other. The listener then carried the "edit" to every holder of a copy —
+   * including the very mapping it had just been read through. That rewrite
+   * was redundant on a good day: the object already carried the content, and
+   * eXo re-rendered it over the client's own authoring, bumped the etag, and
+   * made every other reader of the collection import the same change a second
+   * time. On a bad day, with the event's remote identity lost in the update,
+   * the rewrite minted a fresh UID and wrote a <em>second</em> object beside
+   * the first — the duplication the live rig reproduced twice.
+   *
+   * <p>
+   * Only the origin is skipped. Every other holder still receives the change:
+   * a meeting the organiser moved from their phone must still reach the copy
+   * each attendee holds on their own account. That is the fan-out this service
+   * exists for, and it is not touched.
+   *
+   * <p>
+   * The announcement is consumed by the first broadcast for the event that
+   * meets it, whichever thread carries it. Agenda broadcasts exactly once per
+   * update or deletion, so one announcement covers one change and nothing
+   * more: a genuine edit made in eXo a moment later arrives as its own
+   * broadcast, finds nothing announced, and is carried to the origin like to
+   * everyone else. Should the two broadcasts cross, each reads the event as it
+   * stands when it runs, so whichever is not skipped writes the later state —
+   * the order does not matter to what the copy ends up showing.
+   *
+   * @param eventId the agenda event the change is about to be applied to
+   * @param objectSyncId the mapping the change was read through, whose copy
+   *          is the change's source and must not be rewritten for it
+   */
+  public void changedOnTheServer(long eventId, long objectSyncId) {
+    if (eventId <= 0 || objectSyncId <= 0) {
+      return;
+    }
+    Instant now = Instant.now();
+    fromServer.values().removeIf(origin -> origin.until().isBefore(now));
+    fromServer.put(eventId, new FromServer(objectSyncId, now.plus(FROM_SERVER_FOR)));
+  }
+
+  /**
+   * Withdraws an announcement whose change was never applied.
+   *
+   * <p>
+   * Called when agenda refused the update or deletion: no broadcast followed,
+   * so nothing would consume the announcement, and left in place it would
+   * silence the next genuine edit of the event until it expired.
+   *
+   * @param eventId the agenda event the announcement was made for
+   */
+  public void notChangedAfterAll(long eventId) {
+    fromServer.remove(eventId);
+  }
+
+  /**
+   * The mapping the change being propagated was read through, consumed, or
+   * null when the change did not come from the server.
+   *
+   * @param eventId the agenda event being propagated
+   * @return the origin mapping id, or null
+   */
+  private Long originOf(long eventId) {
+    FromServer origin = fromServer.remove(eventId);
+    if (origin == null || origin.until().isBefore(Instant.now())) {
+      return null;
+    }
+    return origin.objectSyncId();
+  }
+
+  /**
+   * A change announced as the server's own: the mapping it was read through,
+   * and when the announcement stops being trusted.
+   *
+   * @param objectSyncId the mapping the change came through
+   * @param until when the announcement expires
+   */
+  private record FromServer(long objectSyncId, Instant until) {
+  }
 
   /**
    * Copies a meeting that has just been created into the calendar of everybody
@@ -500,6 +619,9 @@ public class CaldavEventPropagationService {
     if (eventId <= 0) {
       return 0;
     }
+    // Taken first, whatever happens next: an announcement is for one
+    // broadcast, and this is that broadcast even when it carries nothing.
+    Long origin = originOf(eventId);
     Event event = readEvent(eventId);
     if (!caldavCopyPolicy.mayHoldCopy(event)) {
       return retireCopies(eventId);
@@ -519,6 +641,7 @@ public class CaldavEventPropagationService {
       LOG.debug("Event {} was edited but nobody holds a copy of it; nothing to carry out", eventId);
       return 0;
     }
+    int skipped = leaveOrigin(holders, origin, eventId);
     // Every obligation first, then every write. Not interleaved, deliberately:
     // a thread killed at the third of fifty attendees must leave the other
     // forty-seven recorded as owed, and interleaving would leave them looking
@@ -532,8 +655,40 @@ public class CaldavEventPropagationService {
         carried++;
       }
     }
-    LOG.info("Event {} was edited; its copy was rewritten for {} of {} holders", eventId, carried, holders.size());
+    LOG.info("Event {} was edited; its copy was rewritten for {} of {} holders", eventId, carried, holders.size() + skipped);
     return carried;
+  }
+
+  /**
+   * Takes the copy a change was read from out of the holders it is carried to.
+   *
+   * <p>
+   * Removed from the map rather than tested for in each loop, so the two loops
+   * that follow — recording what is owed, then writing — cannot disagree about
+   * it: a write that is not attempted must not be owed either, or the retry
+   * pass would carry out the very echo the listener declined.
+   *
+   * @param holders the holders of a copy, by user, edited in place
+   * @param origin the mapping the change was read through, or null when the
+   *          change did not come from the server
+   * @param eventId the agenda event, for the log
+   * @return how many holders were left out — one or none
+   */
+  private int leaveOrigin(Map<Long, ObjectSync> holders, Long origin, long eventId) {
+    if (origin == null) {
+      return 0;
+    }
+    int skipped = 0;
+    for (Map.Entry<Long, ObjectSync> holder : new ArrayList<>(holders.entrySet())) {
+      if (origin.equals(holder.getValue().getId())) {
+        LOG.debug("The change to event {} was read from the copy of user {}; that copy is not written back to",
+                  eventId,
+                  holder.getKey());
+        holders.remove(holder.getKey());
+        skipped++;
+      }
+    }
+    return skipped;
   }
 
   /**
@@ -696,10 +851,16 @@ public class CaldavEventPropagationService {
     if (eventId <= 0) {
       return 0;
     }
+    Long origin = originOf(eventId);
     // Not resolving the series here, and not able to: the event row is already
     // gone by the time this event is broadcast, so there is nothing left to
     // read a parent from.
     Map<Long, ObjectSync> holders = holdersOf(eventId, false);
+    // The object the deletion was read from is already gone from the server;
+    // asking the server to remove it again is the echo EXO-90190 stops, and
+    // owing that removal would leave a retry chasing a mapping the inbound
+    // pass drops right after this.
+    int skipped = leaveOrigin(holders, origin, eventId);
     if (holders.isEmpty()) {
       LOG.debug("Event {} was deleted but nobody holds a copy of it; nothing to carry out", eventId);
       return 0;
@@ -719,7 +880,7 @@ public class CaldavEventPropagationService {
         removed++;
       }
     }
-    LOG.info("Event {} was deleted; its copy was removed for {} of {} holders", eventId, removed, holders.size());
+    LOG.info("Event {} was deleted; its copy was removed for {} of {} holders", eventId, removed, holders.size() + skipped);
     return removed;
   }
 

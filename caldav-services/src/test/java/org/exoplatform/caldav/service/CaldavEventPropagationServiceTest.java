@@ -269,6 +269,81 @@ public class CaldavEventPropagationServiceTest {
   }
 
   /**
+   * EXO-90190. A change the inbound pass read from Alice's copy is not written
+   * back to Alice's copy: that object is the change's source, and the rewrite
+   * re-rendered it, bumped its etag, and — with the event's identity lost —
+   * wrote a second object beside it. Bob's copy, which did not have the change,
+   * still gets it: the fan-out is untouched.
+   */
+  @Test
+  public void aChangeReadFromACopyIsNotWrittenBackToThatCopy() {
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/default/uid-8801.ics"),
+                 mapping(2L, 200L, "uid-8801", "/dav/bob/mirror/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    givenPair(200L, BOB);
+    when(caldavPushService.pushAgendaEvent(anyLong(), anyString(), eq(EVENT))).thenReturn(new ObjectSync());
+
+    service.changedOnTheServer(EVENT, 1L);
+
+    assertEquals(1, service.propagateUpdate(EVENT, A_REAL_EDIT));
+    verify(caldavPushService, never()).pushAgendaEvent(eq(ALICE), anyString(), anyLong());
+    verify(caldavPushService).pushAgendaEvent(BOB, login(BOB), EVENT);
+    // Not owed either: the retry pass must not carry out the echo the listener declined.
+    verify(caldavPendingPushStorage, never()).owe(eq(1L), anyLong(), any(), any(), any());
+    verify(caldavPendingPushStorage).owe(eq(2L), eq(BOB), eq(PendingPushKind.REWRITE), eq(EVENT), eq("uid-8801"));
+  }
+
+  /**
+   * One announcement covers one broadcast. The next edit of the same event —
+   * a genuine one, made in eXo — finds nothing announced and reaches Alice's
+   * copy like everyone else's. This is what keeps the mechanism from ever
+   * silencing a real edit.
+   */
+  @Test
+  public void anAnnouncementCoversOneBroadcastOnly() {
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/default/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    when(caldavPushService.pushAgendaEvent(anyLong(), anyString(), eq(EVENT))).thenReturn(new ObjectSync());
+
+    service.changedOnTheServer(EVENT, 1L);
+    assertEquals(0, service.propagateUpdate(EVENT, A_REAL_EDIT));
+    assertEquals(1, service.propagateUpdate(EVENT, A_REAL_EDIT));
+
+    verify(caldavPushService).pushAgendaEvent(ALICE, login(ALICE), EVENT);
+  }
+
+  /**
+   * An announcement withdrawn — agenda refused the update, nothing was
+   * broadcast — is not honoured by the next broadcast.
+   */
+  @Test
+  public void aWithdrawnAnnouncementIsNotHonoured() {
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/default/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    when(caldavPushService.pushAgendaEvent(anyLong(), anyString(), eq(EVENT))).thenReturn(new ObjectSync());
+
+    service.changedOnTheServer(EVENT, 1L);
+    service.notChangedAfterAll(EVENT);
+
+    assertEquals(1, service.propagateUpdate(EVENT, A_REAL_EDIT));
+  }
+
+  /**
+   * An announcement names one mapping; a broadcast for the same event whose
+   * holders do not include that mapping is carried in full.
+   */
+  @Test
+  public void anAnnouncementForAnotherMappingSkipsNobody() {
+    givenHolders(mapping(2L, 200L, "uid-8801", "/dav/bob/mirror/uid-8801.ics"));
+    givenPair(200L, BOB);
+    when(caldavPushService.pushAgendaEvent(anyLong(), anyString(), eq(EVENT))).thenReturn(new ObjectSync());
+
+    service.changedOnTheServer(EVENT, 1L);
+
+    assertEquals(1, service.propagateUpdate(EVENT, A_REAL_EDIT));
+  }
+
+  /**
    * The guard the task asks for by name. An attendee who has never had a copy
    * of this meeting must not acquire one because somebody edited it — seeding
    * a copy is a different decision, taken elsewhere.
@@ -672,6 +747,27 @@ public class CaldavEventPropagationServiceTest {
 
     verify(caldavPushService).deleteEvent(ALICE, login(ALICE), "uid-8801");
     verify(caldavPushService).deleteEvent(BOB, login(BOB), "uid-8801");
+  }
+
+  /**
+   * EXO-90190, deletion side. The object the deletion was read from is already
+   * gone from the server: asking the server to remove it again is an echo, and
+   * owing that removal chases a mapping the inbound pass drops next. Bob's
+   * copy, which still exists, is removed.
+   */
+  @Test
+  public void aDeletionReadFromACopyIsNotSentBackToThatCopy() {
+    givenHolders(mapping(1L, 100L, "uid-8801", "/dav/alice/default/uid-8801.ics"),
+                 mapping(2L, 200L, "uid-8801", "/dav/bob/mirror/uid-8801.ics"));
+    givenPair(100L, ALICE);
+    givenPair(200L, BOB);
+
+    service.changedOnTheServer(EVENT, 1L);
+
+    assertEquals(1, service.propagateDeletion(EVENT));
+    verify(caldavPushService, never()).deleteEvent(eq(ALICE), anyString(), anyString());
+    verify(caldavPushService).deleteEvent(BOB, login(BOB), "uid-8801");
+    verify(caldavPendingPushStorage, never()).owe(eq(1L), anyLong(), any(), any(), any());
   }
 
   /**

@@ -821,6 +821,33 @@ public class CaldavPushServiceTest {
     verify(agendaRemoteEventService, never()).saveRemoteEvent(anyLong(), any(), anyLong());
   }
 
+  /**
+   * EXO-90190. The identity the inbound pass now records with a remote edit —
+   * the object's own UID, the provider named, no provider id — is exactly what
+   * the push adopts: the rewrite addresses the object the edit was read from,
+   * and nothing is minted. Before the fix the update had deleted the record,
+   * this lookup found nothing, and the push wrote a second object.
+   */
+  @Test
+  public void anIdentityRecordedByARemoteEditIsAdoptedNotReplaced() throws Exception {
+    givenAMirror();
+    givenAnAgendaEvent(101L, 0L);
+    RemoteEvent recordedByTheInboundPass = new RemoteEvent();
+    recordedByTheInboundPass.setRemoteId("4ea1b1e1-the-servers-own-uid");
+    recordedByTheInboundPass.setRemoteProviderName(CaldavPushService.CONNECTOR_NAME);
+    when(agendaRemoteEventService.findRemoteEvent(101L, USER)).thenReturn(recordedByTheInboundPass);
+    when(agendaEventIcsMapper.toIcsEvent(any(), anyString(), anyLong())).thenReturn(event("4ea1b1e1-the-servers-own-uid"));
+    when(calDavClient.putObject(any(), anyString(), anyString())).thenReturn(new PutResult(201, "\"e\"", null));
+    when(caldavSyncStorage.saveObject(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    service.pushAgendaEvent(USER, "john", 101L);
+
+    ArgumentCaptor<String> uid = ArgumentCaptor.forClass(String.class);
+    verify(agendaEventIcsMapper).toIcsEvent(any(), uid.capture(), anyLong());
+    assertEquals("4ea1b1e1-the-servers-own-uid", uid.getValue());
+    verify(agendaRemoteEventService, never()).saveRemoteEvent(anyLong(), any(), anyLong());
+  }
+
   @Test
   public void aFirstPushRecordsItsIdentifierBeforeWriting() throws Exception {
     givenAMirror();
