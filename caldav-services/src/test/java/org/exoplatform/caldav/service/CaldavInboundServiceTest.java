@@ -1781,6 +1781,56 @@ public class CaldavInboundServiceTest {
   }
 
   /**
+   * A deployment whose base URL carries a path does not report its own copies
+   * as another deployment's.
+   *
+   * <p>
+   * {@code exo.base.url=https://exo.example.test/intranet} makes every copy
+   * this deployment writes carry
+   * {@code .../intranet/portal/dw/agenda?eventId=42}. Unanchored, the link
+   * pattern read {@code intranet} out of that — a path segment, not an
+   * authority — compared it against the deployment's own
+   * {@code exo.example.test} and accused the deployment of being somebody
+   * else, on every object it had itself written. No shipped deployment shape
+   * has a path, so this is hardening rather than a field defect; it is pinned
+   * because the failure direction is a false accusation, which is the
+   * expensive one here, and because a genuine second writer must still be
+   * named in that same environment.
+   */
+  @Test
+  public void aBaseUrlCarryingAPathDoesNotMakeThisDeploymentFlagItsOwnCopies() throws Exception {
+    String configured = System.getProperty(DOMAIN_PROPERTY);
+    try {
+      System.setProperty(DOMAIN_PROPERTY, "https://exo.example.test/intranet");
+      givenTheRecordIsRefreshedAtMostEvery(3600);
+      givenServerObjects(object("o1.ics",
+                                "etag-1",
+                                copy("uid-1@example.test", "ours", "https://exo.example.test/intranet/portal/dw/agenda?eventId=42")),
+                         object("o2.ics",
+                                "etag-2",
+                                copy("uid-2@example.test", "ours too", "exo.example.test/intranet/portal/dw/agenda?eventId=43")),
+                         object("o3.ics", "etag-3", copy("uid-3@example.test", "theirs", FOREIGN_LINK)));
+      givenAgendaCreates(501L);
+
+      List<ILoggingEvent> said;
+      try (LogRecorder log = new LogRecorder(CaldavInboundService.class)) {
+        service.importInto(USER, LOGIN, pair(), calendar(), from(), to());
+        said = foreignDeploymentWarnings(log);
+      }
+
+      assertEquals(1, said.size(), () -> "only the genuine second writer is named: " + said);
+      assertTrue(said.get(0).getFormattedMessage().contains("acceptance.example.test"), said.get(0).getFormattedMessage());
+      verify(caldavServerService, never()).recordForeignWriter(anyLong(), eq("intranet"));
+    } finally {
+      if (configured == null) {
+        System.clearProperty(DOMAIN_PROPERTY);
+      } else {
+        System.setProperty(DOMAIN_PROPERTY, configured);
+      }
+    }
+  }
+
+  /**
    * An ordinary remote event is never mistaken for a foreign copy, whatever it
    * links to.
    */
@@ -1833,6 +1883,16 @@ public class CaldavInboundServiceTest {
     other.setDescription("See https://meet.example.test/j/123");
     assertNull(CaldavInboundService.deploymentNamedBy(other));
     assertNull(CaldavInboundService.deploymentNamedBy(new IcsEvent()));
+
+    // A path segment is not an authority. The address counts only where it
+    // begins the text or follows a delimiter, so a link served from under a
+    // path is not recognised at all rather than recognised as "intranet".
+    IcsEvent underAPath = new IcsEvent();
+    underAPath.setEventUrl("https://exo.example.test/intranet/portal/dw/agenda?eventId=42");
+    assertNull(CaldavInboundService.deploymentNamedBy(underAPath));
+    IcsEvent underAPathWithoutScheme = new IcsEvent();
+    underAPathWithoutScheme.setDescription("Event link: exo.example.test/intranet/portal/dw/agenda?eventId=42");
+    assertNull(CaldavInboundService.deploymentNamedBy(underAPathWithoutScheme));
 
     assertEquals("localhost:8080", CaldavInboundService.authorityOf("http://localhost:8080/"));
     assertEquals("exo.example.test", CaldavInboundService.authorityOf("https://EXO.example.test"));

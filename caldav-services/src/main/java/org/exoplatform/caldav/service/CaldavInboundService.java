@@ -41,9 +41,9 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -131,9 +131,32 @@ public class CaldavInboundService {
    * carried its link without one. Nothing but this exact shape is recognised,
    * so a link to anything else — a conference, an intranet page, another
    * portal's wiki — is not a copy and is never reported as one.
+   *
+   * <p>
+   * The address is <b>anchored</b>: it counts only where it begins the text or
+   * follows a delimiter — whitespace, a bracket, a quote, a comma or a
+   * semicolon — never where it begins in the middle of something longer. Two
+   * mechanisms were available for this and the reason for choosing the anchor
+   * is worth keeping. Unanchored, group 1 could start at any path segment, so
+   * a deployment whose {@code exo.base.url} carries a path —
+   * {@code https://exo.example.test/intranet} — read {@code intranet} out of
+   * its <em>own</em> copies' {@code .../intranet/portal/dw/agenda?eventId=42},
+   * compared it against its own authority {@code exo.example.test} and
+   * reported itself as somebody else. The alternative — widening group 1 to
+   * everything before {@code /portal/} and comparing that whole prefix — reads
+   * such a deployment correctly, but it lets the group cross {@code /}, and
+   * then any text glued to the front of the link (a label with no space after
+   * its colon, a server's own markup) is swallowed into the answer and the
+   * deployment is misnamed. Both failures point the same way, at a false
+   * accusation, and this one accuses nobody: a link whose authority cannot be
+   * read off cleanly is simply not recognised as a copy. The price is a blind
+   * spot — a <em>foreign</em> deployment serving from a path is not seen at
+   * all — which is the same kind of blindness as the EXO-89751 floor below,
+   * and the right one to prefer.
    */
   private static final Pattern EXO_EVENT_LINK =
-                                              Pattern.compile("(?:https?://)?([^/\\s<>\"']+)/portal/[^/\\s<>?]+/agenda\\?eventId=\\d+",
+                                              Pattern.compile("(?<![^\\s<>\"'()\\[\\],;])(?:https?://)?([^/\\s<>\"']+)"
+                                                  + "/portal/[^/\\s<>?]+/agenda\\?eventId=\\d+",
                                                               Pattern.CASE_INSENSITIVE);
 
   /**
@@ -1145,6 +1168,12 @@ public class CaldavInboundService {
    * is also what keeps a server's bracketed repetition of the link (BlueMind
    * linkifies every URI in a description) from changing the answer.
    *
+   * <p>
+   * Package-private for one reason only: so the shapes it has to read — the
+   * copy EXO-89824 was diagnosed from, a server's linkified repetition — can
+   * be asserted directly rather than through an import. It is not an API, and
+   * nothing outside this class is meant to call it.
+   *
    * @param master the parsed event
    * @return the authority the copy's event link names, lower-cased, or null
    *         when the event carries no link of eXo's shape
@@ -1208,6 +1237,11 @@ public class CaldavInboundService {
    * {@code exo.example.test/portal} all answer their host and port alone,
    * which is the granularity two deployments differ at: a rig and an
    * acceptance server on one host but different ports are two deployments.
+   *
+   * <p>
+   * Package-private for one reason only: so the spellings a configured domain
+   * arrives in can be asserted directly. It is not an API, and nothing outside
+   * this class is meant to call it.
    *
    * @param address the address, as configured or as a copy carries it
    * @return the authority, lower-cased, or null when there is none
