@@ -1120,7 +1120,7 @@ public class CaldavEventPropagationService {
       if (written) {
         settled(objectSyncId);
       }
-      return written ? Settlement.LANDED : Settlement.refused(null);
+      return written ? Settlement.WRITE_LANDED : Settlement.refused(null);
     } catch (CaldavPushException e) {
       if (CaldavPushService.CONFLICT.equals(e.getCode())) {
         // Somebody wrote that object between the read and the write — very
@@ -1198,7 +1198,7 @@ public class CaldavEventPropagationService {
     try {
       caldavPushService.deleteEvent(userIdentityId, username, icsUid);
       settled(objectSyncId);
-      return Settlement.LANDED;
+      return Settlement.WRITE_LANDED;
     } catch (Exception | LinkageError e) {
       if (e instanceof CaldavPushException refusal && CaldavPushService.isKnownState(refusal.getCode())) {
         // Nowhere to remove it from, because there is no account: a removal
@@ -1442,7 +1442,7 @@ public class CaldavEventPropagationService {
   private record Settlement(boolean landed, String code) {
 
     /** The write landed. */
-    private static final Settlement LANDED = new Settlement(true, null);
+    private static final Settlement WRITE_LANDED = new Settlement(true, null);
 
     /**
      * A write that did not land.
