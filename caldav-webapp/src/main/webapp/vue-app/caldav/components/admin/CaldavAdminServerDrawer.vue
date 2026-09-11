@@ -482,7 +482,11 @@ export default {
       if (!writer || !writer.lastSeen) {
         return '';
       }
-      return new Date(writer.lastSeen).toLocaleDateString(eXo.env.portal.language);
+      // The locale off the component and not off the eXo global, and guarded:
+      // a render that throws does not fail loudly, it silently keeps whatever
+      // the section drew last — which here is the empty state, so a drawer
+      // would go on saying "nothing seen" while holding a finding.
+      return new Date(writer.lastSeen).toLocaleDateString(this.$i18n && this.$i18n.locale || undefined);
     },
     /**
      * Folds the drawer's ticks back into the lists the registration is saved
