@@ -82,8 +82,13 @@ describe('choosing a preset fills what an administrator could not have known', (
     // proved dropped 399 times in one day before anyone knew to look.
     expect(server.droppedProperties).toBe('CONFERENCE');
     // Added: proprietary markers eXo never writes. The tick covers the whole
-    // family, not the one marker a deployment happened to meet first.
-    expect(server.ignoredProperties).toBe('X-MICROSOFT-*,X-MOZ-*,X-ALT-DESC');
+    // family, not the one marker a deployment happened to meet first. PRIORITY
+    // sits here too (EXO-89828): BlueMind stamps one on every entry, eXo writes
+    // none at all, and this list is what keeps a stamp nobody chose from reading
+    // as somebody's edit. The whole string is asserted rather than each member,
+    // so a preset that quietly writes MORE than the seed fails here — the two
+    // must stay the same answer to the same question.
+    expect(server.ignoredProperties).toBe('X-MICROSOFT-*,X-MOZ-*,X-ALT-DESC,PRIORITY');
     // Omitted: empty, and it is an answer rather than a gap. The one entry that
     // changes what eXo WRITES used to be pre-ticked here; since EXO-89805 eXo
     // names no organizer on an event with nobody but its creator on it, on
@@ -362,6 +367,7 @@ describe('a preset says what it chose about the copies', () => {
       dropsConference: /video-conference links/i,
       addsCompatibilityMarkers: /compatibility markers/i,
       addsFormattedDescription: /formatted duplicate of the description/i,
+      stampsDefaultPriority: /default priority/i,
       omitsSoloOrganizer: /organizer/i,
     };
     SERVER_PRESETS.forEach(preset => {

@@ -176,6 +176,7 @@ const QUIRKS = {
   dropsConference: {list: DROPPED, patterns: ['CONFERENCE']},
   addsCompatibilityMarkers: {list: IGNORED, patterns: ['X-MICROSOFT-*', 'X-MOZ-*']},
   addsFormattedDescription: {list: IGNORED, patterns: ['X-ALT-DESC']},
+  stampsDefaultPriority: {list: IGNORED, patterns: ['PRIORITY']},
   omitsSoloOrganizer: {list: OMITTED, patterns: ['SOLO-ORGANIZER']},
 };
 
@@ -228,7 +229,7 @@ export const SERVER_PRESETS = [
     name: 'BlueMind',
     icon: null,
     urlPlaceholder: 'https://bluemind.example.org/dav/',
-    quirks: ['dropsConference', 'addsCompatibilityMarkers', 'addsFormattedDescription'],
+    quirks: ['dropsConference', 'addsCompatibilityMarkers', 'addsFormattedDescription', 'stampsDefaultPriority'],
     [ANSWER_LINKS]: true,
     [MIRROR_TARGET]: MIRROR_TARGET_MAIN_CALENDAR,
   },

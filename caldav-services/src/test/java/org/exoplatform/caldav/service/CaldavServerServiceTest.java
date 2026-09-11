@@ -685,6 +685,14 @@ public class CaldavServerServiceTest {
     // leaves nothing out of what it writes.
     assertFalse(ServerQuirk.listMatches(dropped, "DESCRIPTION"), dropped);
     assertNull(bluemind.getValue().getOmittedProperties());
+    // The whole string, not only its members, and deliberately: the browser
+    // preset writes the same two lists from its own copy of the catalogue
+    // (serverPresets.js), and a row declared through the drawer that differed
+    // from the seeded one would be the drawer and the seed giving two answers
+    // to one question. The literals are asserted on both sides so a change to
+    // either fails a test rather than drifting quietly.
+    assertEquals("X-MICROSOFT-*,X-MOZ-*,X-ALT-DESC,PRIORITY", ignored);
+    assertEquals("CONFERENCE", dropped);
     // The seed lists are the catalogue's, not a second spelling of it.
     for (ServerQuirk quirk : CaldavServerService.BLUEMIND_SEED_QUIRKS) {
       for (String pattern : quirk.getPatterns()) {
