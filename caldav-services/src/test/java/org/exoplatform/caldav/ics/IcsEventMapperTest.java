@@ -341,4 +341,33 @@ public class IcsEventMapperTest {
     source.setTimeZoneId("Etc/UTC");
     return source;
   }
+
+  /**
+   * The description agenda holds is the organiser's text, not the invitation
+   * blurb another eXo user's push composed in front of it (EXO-90227). Pinned
+   * here as well as on the recogniser, because this is the one line that
+   * decides what agenda stores: the recogniser can be right and this mapper
+   * still not call it.
+   */
+  @Test
+  public void anotherUsersInvitationTextIsNotHeldAsTheEventsDescription() {
+    IcsEvent source = new IcsEvent();
+    source.setUid("uid-1");
+    source.setDescription("Invitation envoy\u00e9e par alice2.\n\nEvent link: http://localhost:8080/portal/dw/agenda?eventId=87"
+        + "\n\nD\u00e9tails de l'\u00e9v\u00e9nement :\nBring cake.");
+
+    assertEquals("Bring cake.", mapper.toEvent(source, CALENDAR).getDescription());
+  }
+
+  /**
+   * And a description nobody composed is held exactly as read.
+   */
+  @Test
+  public void aDescriptionAPersonTypedIsHeldAsRead() {
+    IcsEvent source = new IcsEvent();
+    source.setUid("uid-1");
+    source.setDescription("See http://localhost:8080/portal/dw/agenda?eventId=87 for the agenda.\n\nBring cake.");
+
+    assertEquals(source.getDescription(), mapper.toEvent(source, CALENDAR).getDescription());
+  }
 }
