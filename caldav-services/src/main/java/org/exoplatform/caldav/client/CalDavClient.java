@@ -89,11 +89,22 @@ public interface CalDavClient {
    * of any calendar's href, so the two names being compared come from two
    * independent answers.
    *
+   * <p>
+   * <b>A principal the server does not name may come back as null or blank
+   * rather than as an exception.</b> The HTTP client throws, because an
+   * account whose server will not say who it is has nothing to discover from;
+   * an implementer that has no principal to give — a fake, a server spoken to
+   * by href alone — may answer null or blank instead, and the one caller that
+   * compares the answer treats either as a principal it cannot read and
+   * refuses, never guesses. The caller's guard is therefore reachable by
+   * contract, not a leftover.
+   *
    * @param endpoint the declared server
-   * @return the principal's server-absolute raw path
+   * @return the principal's server-absolute raw path, or null or blank when
+   *         the implementer names none
    * @throws CalDavAuthenticationException when the credentials are refused
-   * @throws CalDavException when the server cannot be reached or names no
-   *           current user
+   * @throws CalDavException when the server cannot be reached, or — in the
+   *           HTTP client — names no current user
    */
   String discoverPrincipal(CalDavEndpoint endpoint);
 

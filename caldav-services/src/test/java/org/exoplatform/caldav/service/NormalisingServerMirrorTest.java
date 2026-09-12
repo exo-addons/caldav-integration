@@ -1333,11 +1333,15 @@ public class NormalisingServerMirrorTest {
     /**
      * This fake names no principal. It is only ever asked for to tell an
      * account's own default calendar from a second one listed beside it, and
-     * the registration behind this test asks for eXo's own dedicated calendar.
+     * the registration behind this test asks for eXo's own dedicated calendar,
+     * so nothing in this test reaches the question: what the push service
+     * does with this answer is not exercised here. It is the null answer the
+     * {@link CalDavClient} contract allows an implementer, and what the push
+     * service makes of it — a refusal, never a guess — is pinned where that
+     * path is taken, in {@code CaldavPushServiceTest}.
      *
      * @param endpoint ignored, this fake is addressed by href alone
-     * @return null, which the push service treats as a principal it cannot
-     *         read
+     * @return null, the answer of an implementer with no principal to give
      */
     @Override
     public String discoverPrincipal(CalDavEndpoint endpoint) {
