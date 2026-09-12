@@ -1330,6 +1330,20 @@ public class NormalisingServerMirrorTest {
       return null;
     }
 
+    /**
+     * This fake names no principal. It is only ever asked for to tell an
+     * account's own default calendar from a second one listed beside it, and
+     * the registration behind this test asks for eXo's own dedicated calendar.
+     *
+     * @param endpoint ignored, this fake is addressed by href alone
+     * @return null, which the push service treats as a principal it cannot
+     *         read
+     */
+    @Override
+    public String discoverPrincipal(CalDavEndpoint endpoint) {
+      return null;
+    }
+
     @Override
     public String discoverCalendarHome(CalDavEndpoint endpoint) {
       return HOME;
