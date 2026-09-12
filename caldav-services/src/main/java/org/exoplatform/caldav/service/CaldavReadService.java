@@ -344,14 +344,18 @@ public class CaldavReadService {
    * @return the canonical paths eXo already holds, empty when none
    */
   /**
-   * Whether a collection is one eXo created on the account.
+   * Whether a collection is one <em>an</em> eXo created on the account — this
+   * deployment or any other.
    *
    * <p>
    * Read from the path, which eXo derives, rather than from a binding: the
    * point is precisely to recognise the ones no binding accounts for any more.
+   * Which deployment minted it is not asked here, and need not be: neither
+   * kind belongs under Remote, as the caller explains, so the path alone is
+   * the right test in this one place.
    *
    * @param href the collection path
-   * @return true when eXo made it
+   * @return true when an eXo made it, whichever one
    */
   private boolean isExoCreated(String href) {
     String slug = StringUtils.substringAfterLast(StringUtils.stripEnd(href, "/"), "/");

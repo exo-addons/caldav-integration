@@ -527,17 +527,48 @@ public class CaldavOutboundService {
    * can be asked account-wide rather than for one user.
    *
    * <p>
-   * Ownership is looked up by the anchor the slug carries, not by the href:
-   * the server may list the collection under a path other than the one eXo
-   * created it at, and the anchor is the part that survives. The failure
-   * direction is the safe one — a deployment restored from another's
-   * database would answer "ours" for the other's collections, which is the
-   * skip that held before this question existed.
+   * Ownership is asked two ways, and either answers. <b>By the anchor the
+   * slug carries</b> first: the server may list the collection under a
+   * parent other than the one eXo created it at — BlueMind republishes them
+   * under {@code …/publish/…} — and the slug survives that. <b>By the
+   * recorded path</b> second: the same server has also reported a collection
+   * under a slug other than the one it was created with (EXO-89590 — prefix
+   * kept, suffix replaced), and then the slug carries no anchor anyone here
+   * holds, while an EXO pair recorded at that path still says the collection
+   * is this deployment's. The path arm only ever adds skips, so it cannot
+   * reintroduce what made the path wrong as the <em>sole</em> key: a
+   * colleague's collection republished under another parent still answers
+   * by its anchor. What neither arm answers is a collection republished
+   * under another slug whose pair still records the created path; only a
+   * captured BlueMind listing can say whether that shape occurs.
+   *
+   * <p>
+   * The failure direction depends on which side kept its state. A deployment
+   * <em>cloned</em> from another's database answers "ours" for the other's
+   * collections, which is the skip that held before this question existed.
+   * A deployment whose pair rows are <em>gone</em> while the collections are
+   * not — wiped and re-seeded, restored to a point before the pairs were
+   * written, re-pointed at an account it used to serve — answers "not ours"
+   * for its own former collections and adopts them. Where the restore kept
+   * agenda's calendars and their sync uids, that heals within one pass:
+   * {@link #bindPersonalCalendars} runs before materialisation and re-records
+   * the binding by the derived path, so materialisation finds the anchor
+   * again. Only a full wipe adopts, and what it adopts is bounded — one extra
+   * REMOTE-bound calendar per pre-wipe calendar, named from the collection,
+   * holding the old events; no anchor collision, since materialisation
+   * records the new anchor; no name-collision failure, since agenda accepts
+   * two calendars of one name; and nothing pushed back out, since a REMOTE
+   * pair stops {@code bind} before it creates anything. Visible and
+   * reversible by the user, which is the property the adoption default rests
+   * on.
    *
    * <p>
    * The sweep asks this before materialising a listed collection and before
    * reading through a binding; the push asks it before writing through one.
-   * One definition, so the three answers cannot drift.
+   * One definition, so the three answers cannot drift. A path outside the
+   * outbound prefix asks nothing: no eXo minted it, and keeping the database
+   * out of that case is what keeps the question cheap on a listing that is
+   * mostly the user's own calendars.
    *
    * @param serverId the declared server registration
    * @param href the collection path, canonical or not
@@ -545,7 +576,11 @@ public class CaldavOutboundService {
    */
   public boolean isMintedByThisDeployment(long serverId, String href) {
     String anchor = anchorOf(href);
-    return anchor != null && caldavSyncStorage.isExoCalendarOnServer(serverId, anchor);
+    if (anchor == null) {
+      return false;
+    }
+    return caldavSyncStorage.isExoCalendarOnServer(serverId, anchor)
+        || caldavSyncStorage.isExoCollectionOnServer(serverId, href);
   }
 
   /**

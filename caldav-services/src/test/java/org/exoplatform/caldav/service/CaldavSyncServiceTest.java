@@ -121,6 +121,15 @@ public class CaldavSyncServiceTest {
 
   private static final String        MAIN   = "/dav/calendars/john/calendar:Default:47/";
 
+  /**
+   * An eXo-made collection as BlueMind has reported it (EXO-89590): the
+   * prefix kept, the slug replaced by a name of the server's own, so it is no
+   * longer the anchor eXo minted. Shared with the outbound and DAO pins for
+   * the same server behaviour, so the three tests are visibly about one
+   * thing.
+   */
+  public static final String         RENAMED_BY_THE_SERVER = "/dav/calendars/john/exo-cal-renamed-by-the-server/";
+
   @Mock
   private CalDavClient               calDavClient;
 
@@ -448,7 +457,7 @@ public class CaldavSyncServiceTest {
     // the same omission on a materialised binding must still be marked.
     givenServerCalendars(collection("/dav/calendars/john/other/", "Other"));
     givenAgendaCreates("other-anchor");
-    CalendarSync mine = exoPair("/dav/calendars/john/exo-cal-renamed-by-the-server/");
+    CalendarSync mine = exoPair(RENAMED_BY_THE_SERVER);
     mine.setLocalCalendarSyncUid("anchor-mine");
     when(caldavSyncStorage.getPairs(USER, SERVER)).thenReturn(List.of(mine));
     givenAgendaHasCalendar("anchor-mine");
@@ -456,6 +465,32 @@ public class CaldavSyncServiceTest {
     service.syncNow(USER, LOGIN);
 
     assertEquals(CalendarSyncStatus.ACTIVE, mine.getStatus());
+  }
+
+  /**
+   * A collection this user is already bound to is recognised from the pairs
+   * in hand, without the account-wide question.
+   */
+  @Test
+  public void aCollectionThisUserIsBoundToIsNotAskedAboutAccountWide() throws Exception {
+    // The ownership question walks the pair table — no index serves it — and
+    // the commonest listed collection is one the user is already bound to:
+    // every calendar of their own eXo exported, on every pass. Those are
+    // settled from the user's own pairs, which are already in memory, and
+    // the database is asked only for a prefixed collection none of them
+    // records. The order is the pin: asked first, the question would cost a
+    // walk per own calendar per pass for an answer the pairs already held.
+    String href = "/dav/calendars/john/exo-cal-anchor-mine/";
+    givenServerCalendars(collection(href, "Mine"));
+    CalendarSync mine = exoPair(href);
+    mine.setLocalCalendarSyncUid("anchor-mine");
+    when(caldavSyncStorage.getPairs(USER, SERVER)).thenReturn(List.of(mine));
+    givenAgendaHasCalendar("anchor-mine");
+
+    service.syncNow(USER, LOGIN);
+
+    verify(agendaCalendarService, never()).createCalendar(any(), anyString());
+    verify(caldavOutboundService, never()).isMintedByThisDeployment(anyLong(), anyString());
   }
 
   @Test

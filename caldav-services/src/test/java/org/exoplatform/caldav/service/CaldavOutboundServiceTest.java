@@ -304,10 +304,38 @@ public class CaldavOutboundServiceTest {
     when(caldavSyncStorage.isExoCalendarOnServer(SERVER, ANCHOR)).thenReturn(true, false);
 
     assertTrue(service.isMintedByThisDeployment(SERVER, WANTED), "a colleague's calendar, or one's own");
+    // The anchor answered, so the path is not asked: that arm walks the
+    // table and exists for the collection the anchor cannot recognise.
+    verify(caldavSyncStorage, never()).isExoCollectionOnServer(anyLong(), anyString());
     assertFalse(service.isMintedByThisDeployment(SERVER, WANTED), "another eXo deployment's");
-    // A path that is not eXo's asks nothing: there is no anchor to ask about.
+    // A path that is not eXo's asks nothing: there is no anchor to ask about,
+    // and no eXo records a collection it did not mint.
     assertFalse(service.isMintedByThisDeployment(SERVER, "/dav/calendars/john/private/"));
     verify(caldavSyncStorage, times(2)).isExoCalendarOnServer(anyLong(), anyString());
+    verify(caldavSyncStorage, times(1)).isExoCollectionOnServer(anyLong(), anyString());
+  }
+
+  /**
+   * A collection the server republished under a slug that is not its anchor
+   * is still this deployment's when a pair here records that path.
+   */
+  @Test
+  public void aCollectionRepublishedUnderAnotherSlugIsThisDeploymentsByItsRecordedPath() {
+    // The shape EXO-89590 pinned against BlueMind, in the sweep's own suite:
+    // the prefix kept, the slug replaced by a name of the server's own. The
+    // slug then carries no anchor any pair here holds, and read by the anchor
+    // alone the deployment would call its own collection another eXo's and
+    // adopt it — a second calendar for one it already has. The path a pair
+    // records is what still says whose it is. Asked account-wide like the
+    // anchor, so a colleague's republished collection answers too.
+    when(caldavSyncStorage.isExoCalendarOnServer(SERVER, "renamed-by-the-server")).thenReturn(false);
+    when(caldavSyncStorage.isExoCollectionOnServer(SERVER, CaldavSyncServiceTest.RENAMED_BY_THE_SERVER)).thenReturn(true);
+
+    assertTrue(service.isMintedByThisDeployment(SERVER, CaldavSyncServiceTest.RENAMED_BY_THE_SERVER),
+               "the anchor is the server's word, the recorded path is still ours");
+
+    verify(caldavSyncStorage).isExoCalendarOnServer(SERVER, "renamed-by-the-server");
+    verify(caldavSyncStorage).isExoCollectionOnServer(SERVER, CaldavSyncServiceTest.RENAMED_BY_THE_SERVER);
   }
 
   @Test

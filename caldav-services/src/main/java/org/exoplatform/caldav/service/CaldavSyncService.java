@@ -1706,6 +1706,15 @@ public class CaldavSyncService {
    * path — so the user's primary calendar read as already accounted for and
    * was never materialised, nor its events ever read.
    *
+   * <p>
+   * <b>The user's own pairs before the database.</b> The account-wide
+   * ownership question walks the pair table — no index serves it, see the
+   * DAO — so it is asked last, after the pairs already in hand have had
+   * their say: a collection this user is bound to, whatever its origin or
+   * state, costs no query. What that ordering cannot save is a collection
+   * the server republishes under a path the user's pairs do not record;
+   * there {@code known} matches nothing and the question is asked as before.
+   *
    * @param serverId the declared server registration, which scopes the
    *          account-wide ownership question
    * @param collection the listed collection
@@ -1724,12 +1733,10 @@ public class CaldavSyncService {
     if (isDedicatedMirror(href)) {
       return true;
     }
-    if (caldavOutboundService.isMintedByThisDeployment(serverId, href)) {
-      return true;
-    }
-    return known.stream()
-                .filter(CaldavSyncService::bindsACalendar)
-                .anyMatch(pair -> href.equals(CaldavSyncStorage.canonicalHref(pair.getRemoteHref())));
+    boolean bound = known.stream()
+                         .filter(CaldavSyncService::bindsACalendar)
+                         .anyMatch(pair -> href.equals(CaldavSyncStorage.canonicalHref(pair.getRemoteHref())));
+    return bound || caldavOutboundService.isMintedByThisDeployment(serverId, href);
   }
 
   /**
