@@ -102,11 +102,16 @@ public class CaldavReadService {
     List<RemoteCalendar> calendars = new ArrayList<>();
     for (CalendarCollection collection : collections) {
       if (isExoCreated(collection.href())) {
-        // A collection eXo made, that eXo no longer has a binding for. It
-        // cannot be materialised — the sync refuses its own creations — so
-        // offering it here is offering something that can never become a
-        // calendar. They appear after a database is restored or reset while
-        // the account keeps what was pushed to it.
+        // A collection an eXo made, that this user has no binding for. Either
+        // this deployment's own, left behind when a database was restored or
+        // reset while the account kept what was pushed to it — the sync
+        // refuses to materialise those, so offering one here is offering
+        // something that can never become a calendar; or another eXo
+        // deployment's, which the sync adopts as an ordinary remote calendar
+        // on its next pass (EXO-90226) and which is then bound, and so
+        // excluded from this list by the binding rather than by the path.
+        // Neither belongs under Remote, so the path alone is still the right
+        // test here.
         continue;
       }
       if (!collection.holdsEvents()) {

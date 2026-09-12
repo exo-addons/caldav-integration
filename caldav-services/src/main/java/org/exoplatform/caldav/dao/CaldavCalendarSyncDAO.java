@@ -175,4 +175,34 @@ public interface CaldavCalendarSyncDAO extends JpaRepository<CaldavCalendarSyncE
                                      @Param("prefix") String prefix,
                                      Pageable pageable);
 
+  /**
+   * Whether any user of this deployment holds a pair of one origin on one
+   * server for one calendar anchor.
+   *
+   * <p>
+   * Asked with {@link SyncOrigin#EXO} to decide whether a collection under
+   * the outbound prefix was minted by <em>this</em> deployment (EXO-90226):
+   * the slug eXo mints carries the calendar's anchor, and an EXO pair on the
+   * server for that anchor means the calendar behind the collection exists
+   * here. Deliberately spanning every user — the pair that answers may be
+   * another user's on a shared account — and every status: a paused or
+   * tombstoned pair still names a calendar this deployment made.
+   *
+   * <p>
+   * Keyed on the anchor rather than on the href, because the server may
+   * report an eXo-made collection under a path other than the one it was
+   * created at (BlueMind republishes them), and the anchor is the one part of
+   * the path that survives. The unique index on (user, server, anchor)
+   * leads with the user, so this is a walk of the server's pairs; asked once
+   * per listed collection under the prefix, which is few.
+   *
+   * @param serverId the declared server registration
+   * @param origin which side created the collection
+   * @param localCalendarSyncUid agenda's immutable calendar anchor
+   * @return true when such a pair exists, whoever holds it
+   */
+  boolean existsByServerIdAndOriginAndLocalCalendarSyncUid(long serverId,
+                                                           SyncOrigin origin,
+                                                           String localCalendarSyncUid);
+
 }

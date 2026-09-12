@@ -415,6 +415,67 @@ public class CaldavSyncDAOQueryTest {
   }
 
   /**
+   * A calendar this deployment exported is found by its anchor on its server,
+   * whoever holds it and whatever state its pair is in — and not on another
+   * server, not under another origin.
+   */
+  @Test
+  public void aCalendarOfThisDeploymentIsFoundByItsAnchorOnItsServer() {
+    // The pair-level ownership question adoption rests on (EXO-90226). User
+    // one exported a calendar; user six, sharing the account, must see its
+    // collection as this deployment's — the calendar exists here — while a
+    // collection whose anchor no EXO pair on the server carries is another
+    // deployment's. The anchor rather than the href, since BlueMind lists
+    // eXo's collections under a path other than the one they were created at.
+    persistExoPair(USER_ONE, SHARED_SERVER, "c0ffee-one", CalendarSyncStatus.ACTIVE);
+    persistExoPair(USER_SIX, SHARED_SERVER, "c0ffee-paused", CalendarSyncStatus.PAUSED);
+    persistExoPair(USER_EIGHT, SHARED_SERVER, "c0ffee-tombstone", CalendarSyncStatus.LOCALLY_DELETED);
+    // The same anchor exported to another server: another registration, so
+    // another account, and no answer for this one.
+    persistExoPair(9L, 99L, "c0ffee-elsewhere", CalendarSyncStatus.ACTIVE);
+    // A REMOTE pair carrying an anchor: a calendar materialised here, whose
+    // collection is the server's and not one eXo minted.
+    persistPair(10L, SHARED_SERVER, SyncOrigin.REMOTE, "/dav/calendars/751E/private");
+
+    assertTrue(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER, SyncOrigin.EXO, "c0ffee-one"),
+               "a colleague's active export");
+    assertTrue(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER, SyncOrigin.EXO, "c0ffee-paused"),
+               "status is not the question: a paused pair still names a calendar here");
+    assertTrue(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER, SyncOrigin.EXO, "c0ffee-tombstone"),
+               "nor is a tombstone: the calendar was this deployment's, and adopting it would resurrect it for someone else");
+    assertFalse(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER, SyncOrigin.EXO, "c0ffee-elsewhere"),
+                "exported to another server");
+    assertFalse(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER,
+                                                                                SyncOrigin.EXO,
+                                                                                "fd3fe75f-58f9-49e5-93d0-85f63b24a807"),
+                "another deployment's anchor, known to no pair here");
+    String materialisedAnchor = "anchor-10-" + "/dav/calendars/751E/private".hashCode();
+    assertFalse(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER, SyncOrigin.EXO, materialisedAnchor),
+                "a REMOTE pair's anchor is not an export");
+    assertTrue(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SHARED_SERVER, SyncOrigin.REMOTE, materialisedAnchor),
+               "the same row, asked under its own origin — the origin predicate is what tells the two apart");
+  }
+
+  /**
+   * @param userIdentityId the user whose calendar was exported
+   * @param serverId the declared server
+   * @param anchor the calendar's anchor, which the collection's slug carries
+   * @param status the pair's state
+   * @return the pair's identifier
+   */
+  private long persistExoPair(long userIdentityId, long serverId, String anchor, CalendarSyncStatus status) {
+    CaldavCalendarSyncEntity entity = new CaldavCalendarSyncEntity();
+    entity.setUserIdentityId(userIdentityId);
+    entity.setServerId(serverId);
+    entity.setLocalCalendarSyncUid(anchor);
+    entity.setRemoteHref("/dav/calendars/751E/exo-cal-" + anchor);
+    entity.setOrigin(SyncOrigin.EXO);
+    entity.setStatus(status);
+    entity.setLastSyncEnd(new Date());
+    return calendarSyncDAO.save(entity).getId();
+  }
+
+  /**
    * @param userIdentityId the user holding the pair
    * @param serverId the declared server
    * @param origin which side created the collection

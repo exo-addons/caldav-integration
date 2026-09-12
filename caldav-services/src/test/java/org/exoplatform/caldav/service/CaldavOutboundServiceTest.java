@@ -19,6 +19,8 @@
 package org.exoplatform.caldav.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -230,6 +232,82 @@ public class CaldavOutboundServiceTest {
     verify(calDavClient, never()).mkCalendar(any(), anyString(), anyString(), any());
     verify(caldavSyncStorage, never()).savePair(any());
     assertEquals(SyncOrigin.REMOTE, pairs.get(0).getOrigin());
+  }
+
+  /**
+   * A calendar adopted from another eXo deployment's collection is not pushed
+   * back out as a collection of its own — the loop the prefix skip was
+   * written against does not follow from adopting it.
+   */
+  @Test
+  public void aCalendarAdoptedFromAnotherDeploymentsCollectionIsNeverPushedBackOut() {
+    // The safety argument behind EXO-90226, verified rather than trusted. The
+    // materialisation used to refuse every collection under eXo's prefix so
+    // that B materialising A's collection could not push the result out as a
+    // new collection for A to materialise in turn. Adopting a collection
+    // ANOTHER deployment minted produces a REMOTE-bound calendar, and this
+    // guard is what stops the loop one layer down: the calendar exists
+    // because a collection was materialised into it, and it is never given a
+    // second collection — not even when the server lists the adopted one
+    // right next to where eXo would create it.
+    String foreign = "/dav/calendars/john/exo-cal-fd3fe75f-58f9-49e5-93d0-85f63b24a807/";
+    Calendar adopted = calendar(1L, USER, ANCHOR, "Perso");
+    givenPersonalCalendars(adopted);
+    givenServerCalendars(List.of(collection(foreign, "Perso")));
+    CalendarSync remote = new CalendarSync();
+    remote.setId(9L);
+    remote.setUserIdentityId(USER);
+    remote.setServerId(SERVER);
+    remote.setLocalCalendarSyncUid(ANCHOR);
+    remote.setRemoteHref(foreign);
+    remote.setOrigin(SyncOrigin.REMOTE);
+    remote.setStatus(CalendarSyncStatus.ACTIVE);
+    when(caldavSyncStorage.getPairByLocalCalendar(USER, SERVER, ANCHOR)).thenReturn(remote);
+
+    List<CalendarSync> pairs = service.bindPersonalCalendars(USER, LOGIN);
+
+    verify(calDavClient, never()).mkCalendar(any(), anyString(), anyString(), any());
+    verify(calDavClient, never()).readCalendar(any(), anyString());
+    verify(caldavSyncStorage, never()).savePair(any());
+    assertEquals(1, pairs.size());
+    assertEquals(SyncOrigin.REMOTE, pairs.get(0).getOrigin());
+    assertEquals(foreign, pairs.get(0).getRemoteHref());
+  }
+
+  /**
+   * The anchor is read from the slug alone, wherever the server lists the
+   * collection.
+   */
+  @Test
+  public void theAnchorIsReadFromTheSlugWhereverTheCollectionIsListed() {
+    assertEquals(ANCHOR, CaldavOutboundService.anchorOf(WANTED));
+    assertEquals(ANCHOR, CaldavOutboundService.anchorOf("/dav/calendars/john/exo-cal-c0ffee-uid"));
+    // BlueMind republishes eXo's collections under another parent; the slug
+    // is the part of the path that survives, and it is the only part read.
+    assertEquals(ANCHOR, CaldavOutboundService.anchorOf("https://dav.example/dav/calendars/publish/exo-cal-c0ffee-uid/"));
+    assertNull(CaldavOutboundService.anchorOf("/dav/calendars/john/private/"));
+    assertNull(CaldavOutboundService.anchorOf("/dav/calendars/john/exo-meetings/"));
+    // The prefix with nothing after it names no calendar.
+    assertNull(CaldavOutboundService.anchorOf("/dav/calendars/john/exo-cal-/"));
+    assertNull(CaldavOutboundService.anchorOf(null));
+    assertNull(CaldavOutboundService.anchorOf(""));
+    assertTrue(CaldavOutboundService.isExoCreated(WANTED));
+    assertFalse(CaldavOutboundService.isExoCreated("/dav/calendars/john/exo-cal-/"));
+  }
+
+  /**
+   * A collection is this deployment's when its slug is eXo's and a user here
+   * holds the calendar the anchor names.
+   */
+  @Test
+  public void aCollectionIsThisDeploymentsWhenAUserHereHoldsItsAnchor() {
+    when(caldavSyncStorage.isExoCalendarOnServer(SERVER, ANCHOR)).thenReturn(true, false);
+
+    assertTrue(service.isMintedByThisDeployment(SERVER, WANTED), "a colleague's calendar, or one's own");
+    assertFalse(service.isMintedByThisDeployment(SERVER, WANTED), "another eXo deployment's");
+    // A path that is not eXo's asks nothing: there is no anchor to ask about.
+    assertFalse(service.isMintedByThisDeployment(SERVER, "/dav/calendars/john/private/"));
+    verify(caldavSyncStorage, times(2)).isExoCalendarOnServer(anyLong(), anyString());
   }
 
   @Test

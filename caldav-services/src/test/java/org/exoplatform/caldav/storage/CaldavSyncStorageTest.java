@@ -468,6 +468,34 @@ public class CaldavSyncStorageTest {
   }
 
   /**
+   * A calendar of this deployment is found by its anchor, whoever holds it
+   * and whatever state its pair is in.
+   */
+  @Test
+  public void aCalendarOfThisDeploymentIsFoundByItsAnchorAccountWide() {
+    // The question behind adopting a foreign exo-cal collection (EXO-90226):
+    // ORIGIN=EXO, across every user of the server and every status — the
+    // storage asks it that way and the engine answers over the real rows in
+    // the DAO query test. Not the per-user lookup, which would call a
+    // colleague's calendar foreign.
+    when(calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(SERVER, SyncOrigin.EXO, "c0ffee-uid")).thenReturn(true);
+
+    assertTrue(storage.isExoCalendarOnServer(SERVER, "c0ffee-uid"));
+    assertFalse(storage.isExoCalendarOnServer(SERVER, "fd3fe75f-58f9-49e5-93d0-85f63b24a807"));
+  }
+
+  /**
+   * A blank anchor names no calendar to ask about.
+   */
+  @Test
+  public void aBlankAnchorAsksNobody() {
+    assertFalse(storage.isExoCalendarOnServer(SERVER, " "));
+    assertFalse(storage.isExoCalendarOnServer(SERVER, null));
+
+    verify(calendarSyncDAO, never()).existsByServerIdAndOriginAndLocalCalendarSyncUid(anyLong(), any(), any());
+  }
+
+  /**
    * A refused insert is told by its JDBC cause, in every shape the platform
    * surfaces it.
    */

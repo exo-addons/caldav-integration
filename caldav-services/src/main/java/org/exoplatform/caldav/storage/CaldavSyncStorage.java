@@ -341,6 +341,32 @@ public class CaldavSyncStorage {
   }
 
   /**
+   * Whether a calendar of this deployment, anyone's, is exported to one
+   * server under one anchor.
+   *
+   * <p>
+   * The account-scoped ownership question for calendar pairs (EXO-90226),
+   * the sibling of the per-object one {@link #isMirrorOwned} asks for copies.
+   * An ORIGIN=EXO pair on the server for the anchor means the collection whose
+   * slug carries that anchor was minted by this deployment for a calendar that
+   * exists here — whichever user's, and whatever state the pair is in now.
+   * No such pair, and the collection was minted by another eXo deployment
+   * writing into the same account, which is a calendar this one has never
+   * seen.
+   *
+   * @param serverId the declared server registration
+   * @param anchor the calendar anchor the collection's slug carries
+   * @return true when a user of this deployment holds an EXO pair for it;
+   *         false when the anchor is blank, which names no calendar
+   */
+  public boolean isExoCalendarOnServer(long serverId, String anchor) {
+    if (StringUtils.isBlank(anchor)) {
+      return false;
+    }
+    return calendarSyncDAO.existsByServerIdAndOriginAndLocalCalendarSyncUid(serverId, SyncOrigin.EXO, anchor);
+  }
+
+  /**
    * The calendar home a collection sits under: its canonical href without the
    * last segment.
    *

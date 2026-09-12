@@ -233,13 +233,54 @@ public class CaldavSyncServiceTest {
     // CalDAV account can be shared. Two eXo users on the same account would
     // each materialise the other's pushed collections, push the results back
     // as new ones, and multiply calendars without either behaving wrongly.
-    // Observed live before this guard existed.
-    givenServerCalendars(collection("/dav/calendars/john/exo-cal-946eec40-e9bd-4cd1-89f2-bddfed786d75/", "Someone else's"));
+    // Observed live before this guard existed. The other user's calendar
+    // already exists inside eXo, which is what the account-wide ownership
+    // question answers — and what makes this a duplicate rather than a
+    // calendar to adopt (EXO-90226).
+    String href = "/dav/calendars/john/exo-cal-946eec40-e9bd-4cd1-89f2-bddfed786d75";
+    givenServerCalendars(collection(href + "/", "Someone else's"));
     givenNoKnownPairs();
+    when(caldavOutboundService.isMintedByThisDeployment(SERVER, href)).thenReturn(true);
 
     service.syncNow(USER, LOGIN);
 
     verify(agendaCalendarService, never()).createCalendar(any(), anyString());
+  }
+
+  /**
+   * A collection another eXo deployment pushed into the account is adopted as
+   * an ordinary remote calendar.
+   */
+  @Test
+  public void aCollectionAnotherExoDeploymentPushedIsAdoptedAsARemoteCalendar() throws Exception {
+    // Observed on the rig against BlueMind (EXO-90226): a calendar minted by
+    // another eXo instance sharing the account — its uuid known to no pair
+    // here — was skipped on the path prefix alone, so no calendar was ever
+    // created for it, while the grid's read-through still showed its events
+    // as external ones with no calendar to attribute them to. Nothing here
+    // exists to duplicate: to this deployment it is what any calendar on the
+    // account is to any other CalDAV client, and it is materialised like one.
+    // Bound REMOTE, which is what keeps the outward pass from pushing it back
+    // out as a collection of its own — the multiplication the prefix skip
+    // was written against is stopped there, and pinned in the outbound suite.
+    String href = "/dav/calendars/john/exo-cal-fd3fe75f-58f9-49e5-93d0-85f63b24a807";
+    givenServerCalendars(collection(href + "/", "Perso"));
+    givenNoKnownPairs();
+    givenAgendaCreates("adopted-anchor");
+    when(caldavOutboundService.isMintedByThisDeployment(SERVER, href)).thenReturn(false);
+
+    service.syncNow(USER, LOGIN);
+
+    ArgumentCaptor<CalendarSync> saved = ArgumentCaptor.forClass(CalendarSync.class);
+    verify(caldavSyncStorage).savePair(saved.capture());
+    assertEquals(SyncOrigin.REMOTE, saved.getValue().getOrigin());
+    assertEquals(href + "/", saved.getValue().getRemoteHref());
+    assertEquals("adopted-anchor", saved.getValue().getLocalCalendarSyncUid());
+    // Asked account-wide, on the canonical path: the question is whether a
+    // calendar of THIS deployment stands behind the collection, not whether
+    // this user holds a pair for it — the pair check on its own would say
+    // no for a same-deployment colleague's calendar too.
+    verify(caldavOutboundService).isMintedByThisDeployment(SERVER, href);
   }
 
   @Test
@@ -1277,21 +1318,24 @@ public class CaldavSyncServiceTest {
   // ---------------------------------------------------------------------
 
   /**
-   * A calendar binding on a collection eXo minted is not read, and is listed.
+   * A calendar binding on a collection this deployment minted is not read,
+   * and is listed.
    */
   @Test
   public void aRemoteBindingOnACollectionEXoCreatedIsSkippedAndListed() {
     // A leftover from before materialisation learned to skip eXo's own paths
     // (EXO-89530): user six materialised user one's exo-cal collection as a
     // calendar of their own. Reading it imports user one's events into user
-    // six's calendar — the loop by another route. The path is the signal,
-    // as it is for materialisation, and the line names the pair so the
-    // cleanup has a list.
+    // six's calendar — the loop by another route. The question is the one
+    // materialisation asks — a calendar of this deployment stands behind the
+    // collection — and the line names the pair so the cleanup has a list.
     String href = "/dav/calendars/john/exo-cal-6bade8c7-7598-48f2-aa24-a40b0ed0ac6c/";
     givenServerCalendars(collection(href, "Someone else's own calendar"));
     CalendarSync leftover = remotePair(href, "anchor-1");
     when(caldavSyncStorage.getPairs(USER, SERVER)).thenReturn(List.of(leftover));
     givenAgendaHasCalendar("anchor-1");
+    when(caldavOutboundService.isMintedByThisDeployment(SERVER, "/dav/calendars/john/exo-cal-6bade8c7-7598-48f2-aa24-a40b0ed0ac6c"))
+                                                                                                                                       .thenReturn(true);
     List<ILoggingEvent> listed;
     try (LogRecorder log = new LogRecorder(CaldavSyncService.class)) {
       service.syncNow(USER, LOGIN);
@@ -1306,6 +1350,37 @@ public class CaldavSyncServiceTest {
     assertEquals(1, listed.size(), "once per pair per pass");
     assertTrue(listed.get(0).getFormattedMessage().startsWith("Binding 2 of user 42 reads " + href),
                listed.get(0).getFormattedMessage());
+  }
+
+  /**
+   * A binding on a collection another eXo deployment minted is read like any
+   * remote calendar's.
+   */
+  @Test
+  public void aRemoteBindingOnAnotherDeploymentsCollectionIsRead() {
+    // The other half of adopting such a collection (EXO-90226). Skipping it on
+    // the prefix alone, as the guard above used to, would give the user a
+    // calendar that is created and then never filled — and a warning on
+    // every pass telling an administrator to remove a binding that is right.
+    String href = "/dav/calendars/john/exo-cal-fd3fe75f-58f9-49e5-93d0-85f63b24a807/";
+    givenServerCalendars(collection(href, "Perso"));
+    CalendarSync adopted = remotePair(href, "anchor-1");
+    when(caldavSyncStorage.getPairs(USER, SERVER)).thenReturn(List.of(adopted));
+    givenAgendaHasCalendar("anchor-1");
+    when(caldavOutboundService.isMintedByThisDeployment(SERVER, "/dav/calendars/john/exo-cal-fd3fe75f-58f9-49e5-93d0-85f63b24a807"))
+                                                                                                                                       .thenReturn(false);
+    List<ILoggingEvent> listed;
+    try (LogRecorder log = new LogRecorder(CaldavSyncService.class)) {
+      service.syncNow(USER, LOGIN);
+      listed = log.events()
+                  .stream()
+                  .filter(recorded -> recorded.getLevel() == Level.WARN
+                      && recorded.getFormattedMessage().contains("it is skipped and should be removed"))
+                  .toList();
+    }
+
+    verify(caldavInboundService).syncContents(eq(USER), eq(LOGIN), same(adopted), any(), any(), any(), anyBoolean());
+    assertTrue(listed.isEmpty(), "nothing to clean up: " + listed);
   }
 
   /**
