@@ -253,6 +253,18 @@ public class AgendaEventIcsMapper {
    * DESCRIPTION it read off the wire — plain text by RFC 5545 &sect;3.8.1.5 —
    * into this same field.
    *
+   * <p>
+   * <b>One block, the pusher's own, whatever the description carries.</b> An
+   * event imported from a copy another eXo user wrote used to hold that
+   * copy's whole description, block included, and this render wrapped it in
+   * a second one on every round trip (EXO-90227). Two guards now, in two
+   * places: the builder itself takes any block already present off the
+   * description before writing its own, and the import
+   * ({@link org.exoplatform.caldav.ics.IcsEventMapper}) no longer stores one
+   * in the first place. Both read the block through agenda's
+   * {@link org.exoplatform.agenda.util.InvitationText}, so there is one
+   * spelling of what the block looks like.
+   *
    * @param event the event being copied
    * @param roster the event's attendees as agenda holds them, which decide
    *          whether there is an invitation to offer an answer to at all

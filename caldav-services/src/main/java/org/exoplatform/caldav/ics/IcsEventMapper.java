@@ -32,6 +32,7 @@ import org.exoplatform.agenda.constant.EventRecurrenceType;
 import org.exoplatform.agenda.constant.EventStatus;
 import org.exoplatform.agenda.model.Event;
 import org.exoplatform.agenda.model.EventRecurrence;
+import org.exoplatform.agenda.util.InvitationText;
 import org.exoplatform.caldav.model.IcsEvent;
 import org.exoplatform.services.log.ExoLogger;
 import org.exoplatform.services.log.Log;
@@ -58,6 +59,20 @@ public class IcsEventMapper {
    * belong to the caller placing the event, not to the object being read, and
    * an event carrying an id it invented would overwrite whatever holds it.
    *
+   * <p>
+   * The description is what the organiser typed, not what the object says:
+   * a copy another eXo user — or another eXo — wrote carries agenda's own
+   * invitation text in front of it, and holding that text as the event's
+   * description is what made two users on one account stack one block per
+   * edit into the object (EXO-90227). Agenda's builder no longer stacks a
+   * second block on a description that carries one, which stops the growth
+   * on every channel it renders; this is the other half, for everything that
+   * reads the <em>stored</em> description directly — the event drawer, the
+   * body of the notification mail, search — and would otherwise show the
+   * other user's name, event id and answer links for ever. The recognition is
+   * agenda's ({@link InvitationText}), spelled once, beside the builder whose
+   * layout it reads; a description that carries none is kept exactly as read.
+   *
    * @param source the parsed object
    * @param calendarId the eXo calendar the event belongs in
    * @return the event to create or update
@@ -69,7 +84,7 @@ public class IcsEventMapper {
     // field for it, and the binding lives in the CALDAV_OBJECT_SYNC ledger
     // where it can outlive an event agenda renumbers.
     event.setSummary(StringUtils.defaultIfBlank(source.getSummary(), ""));
-    event.setDescription(source.getDescription());
+    event.setDescription(InvitationText.stripFrom(source.getDescription()));
     event.setLocation(source.getLocation());
     event.setAllDay(source.isAllDay());
     ZoneId zone = zoneOf(source.getTimeZoneId());

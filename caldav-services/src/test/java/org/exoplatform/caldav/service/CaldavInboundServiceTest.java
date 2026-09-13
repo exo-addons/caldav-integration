@@ -592,6 +592,86 @@ public class CaldavInboundServiceTest {
   }
 
   /**
+   * <b>The field shape (EXO-90227).</b> Two eXo users on one CalDAV account,
+   * both mapped to the same object: the other user's push rewrote it, and its
+   * description now carries <em>their</em> invitation blurb — naming their
+   * event, 87, not this user's 501. What agenda is asked to store for this
+   * user's event is the organiser's text alone; the blurb is eXo's and the
+   * next push of this event composes its own. Held whole, it was wrapped in a
+   * second blurb on that push, and the object grew by one block per edit.
+   */
+  @Test
+  public void anotherUsersInvitationBlurbOnTheSharedObjectIsNotStoredAsTheDescription() throws Exception {
+    givenServerObjects(object("o1.ics",
+                              "etag-2",
+                              icsDescribed("uid-1@example.test",
+                                           "alice2Event123",
+                                           "20261005T120000Z",
+                                           "Invitation envoyée par alice2.\\n\\nEvent link: http://localhost:8080/portal/dw/agenda?eventId=87"
+                                               + "\\n\\nDétails de l'événement :\\nBring cake.")));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(eventUpdatedAt("2026-10-05T09:00:00Z"));
+
+    assertEquals(1, service.importInto(USER, LOGIN, pair(), calendar(), from(), to()));
+
+    ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
+    verify(agendaEventService).updateEvent(saved.capture(), any(), any(), any(), any(), any(), eq(false), eq(USER));
+    assertEquals("Bring cake.", saved.getValue().getDescription());
+    assertEquals("alice2Event123", saved.getValue().getSummary());
+  }
+
+  /**
+   * <b>The regression guard.</b> A description nobody composed — what a
+   * person typed into their calendar client, with an eXo event link in it —
+   * is stored byte for byte as the object carries it.
+   */
+  @Test
+  public void aDescriptionAPersonTypedOnTheServerIsStoredAsRead() throws Exception {
+    givenServerObjects(object("o1.ics",
+                              "etag-2",
+                              icsDescribed("uid-1@example.test",
+                                           "Retro",
+                                           "20261005T120000Z",
+                                           "See http://localhost:8080/portal/dw/agenda?eventId=87 for the agenda.\\n\\nBring cake.")));
+    when(caldavSyncStorage.getObjectByUid(PAIR, "uid-1@example.test")).thenReturn(mapping("etag-1"));
+    when(agendaEventService.getEventById(501L)).thenReturn(eventUpdatedAt("2026-10-05T09:00:00Z"));
+
+    assertEquals(1, service.importInto(USER, LOGIN, pair(), calendar(), from(), to()));
+
+    ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
+    verify(agendaEventService).updateEvent(saved.capture(), any(), any(), any(), any(), any(), eq(false), eq(USER));
+    assertEquals("See http://localhost:8080/portal/dw/agenda?eventId=87 for the agenda.\n\nBring cake.",
+                 saved.getValue().getDescription());
+  }
+
+  /**
+   * @param uid the object's uid
+   * @param summary its summary
+   * @param lastModified its LAST-MODIFIED stamp
+   * @param description its DESCRIPTION, already escaped as RFC 5545 spells a
+   *          line break ({@code \\n})
+   * @return a single-event calendar object carrying that description
+   */
+  private String icsDescribed(String uid, String summary, String lastModified, String description) {
+    return """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        PRODID:-//Exo Platform//NONSGML v1.0//EN
+        BEGIN:VEVENT
+        DTSTAMP:20261001T080000Z
+        LAST-MODIFIED:%s
+        UID:%s
+        DTSTART:20261012T090000Z
+        DTEND:20261012T100000Z
+        SUMMARY:%s
+        DESCRIPTION:%s
+        URL:http://localhost:8080/portal/dw/agenda?eventId=87
+        END:VEVENT
+        END:VCALENDAR
+        """.formatted(lastModified, uid, summary, description);
+  }
+
+  /**
    * The defect the rig reproduced twice (EXO-90190): the update passed
    * {@code null} as the event's remote identity, which agenda reads as "delete
    * the mapping". The next push then found no UID, minted one, and wrote a
